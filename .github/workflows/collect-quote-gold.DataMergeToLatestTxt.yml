@@ -1,4 +1,4 @@
-name: quote-gold.DataMergeToLatestTxt
+name: collect-quote-gold.DataMergeToLatestTxt
 
 # 每 4 小时定时执行一次; 同时支持手动触发(workflow_dispatch)以便随时测试
 on:
@@ -24,7 +24,7 @@ jobs:
       - name: 检出 quote-gold 分支
         uses: actions/checkout@v5
         with:
-          ref: quote-gold
+          ref: collect-quote-gold
           fetch-depth: 0
 
       - name: 配置 Python
