@@ -52,7 +52,7 @@ VOLATILE_META_KEYS = ('FetchTime', '采集时间', 'Remark', '备注')
 # 原始文件清理开关 (默认关闭): 置 1/true 时, ts 范围被 Latest 完整覆盖的原始文件会被删除
 CLEANUP_RAW_ENV = 'AGG_CLEANUP_RAW'
 
-DEFAULT_BRANCH = 'quote'
+DEFAULT_BRANCH = 'collect-quote'
 API_BASE_ENV = 'GITHUB_API_BASE'
 API_RETRY = 3
 API_RETRY_INTERVAL = 5
