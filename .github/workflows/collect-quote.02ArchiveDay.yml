@@ -1,4 +1,4 @@
-name: quote.02ArchiveDay
+name: collect-quote.02ArchiveDay
 on:
   workflow_dispatch:
     inputs:
@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: quote
+          ref: collect-quote
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
