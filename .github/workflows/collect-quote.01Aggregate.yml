@@ -1,7 +1,7 @@
-name: quote.01Aggregate
+name: collect-quote.01Aggregate
 on:
   push:
-    branches: [quote]
+    branches: [collect-quote]
     paths:
       - 'Data/Finv/SecurityQuoteV5/FTMM/Min/GCMain/*.mvsv'
       - 'Data/Finv/SecurityQuoteV5/FTMM/Min/PAXG/*.mvsv'
@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: quote
+          ref: collect-quote
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -38,10 +38,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-      # - name: RunTask01AggregateLatest
-      #   env:
-      #     QUOTE_CODES: ${{ github.event.inputs.codes }}
-      #   run: python .github/Python/Quote/Task01AggregateLatest.py
       - name: RunTask11AggregateLatest
         env:
           QUOTE_CODES: ${{ github.event.inputs.codes }}
