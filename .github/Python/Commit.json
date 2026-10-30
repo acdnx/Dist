@@ -1,6 +1,6 @@
 {
   "Owner": "acdnx",
-  "Repo": "Distribution",
+  "Repo": "Dist",
   "BranchMigration": "Migration",
   "BranchSuccess": "Success",
   "BranchDelete": "Delete"
