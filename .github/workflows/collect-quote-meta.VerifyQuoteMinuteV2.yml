@@ -1,4 +1,4 @@
-name: VerifyQuoteMinuteV2
+name: collect-quote-meta.VerifyQuoteMinuteV2
 
 # =============================================================================
 # V2 与 V1（VerifyQuoteMinute + VerifyQuoteMinuteSyncConfig）并行存在，互不影响：
@@ -43,12 +43,12 @@ on:
       branch:
         description: '产物提交目标分支'
         required: false
-        default: 'quote-meta'
+        default: 'collect-quote-meta'
         type: string
       checkout_ref:
         description: '检出哪个分支上的任务脚本；默认 quote-meta（不是本次 dispatch 的 ref）'
         required: false
-        default: 'quote-meta'
+        default: 'collect-quote-meta'
         type: string
       markets:
         description: '只处理这些行情市场段（逗号分隔，留空不限）'
@@ -103,7 +103,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           # 显式回落 quote-meta：V2 脚本只在产物分支上，用 github.ref 会在 dev 上找不到文件
-          ref: ${{ inputs.checkout_ref || 'quote-meta' }}
+          ref: ${{ inputs.checkout_ref || 'collect-quote-meta' }}
 
       - name: 准备 Python
         uses: actions/setup-python@v5
