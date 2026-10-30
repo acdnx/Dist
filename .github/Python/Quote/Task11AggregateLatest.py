@@ -203,20 +203,7 @@ def resolveRepoSlug():
 
 def resolveBranch():
     """目标分支: 仅取显式配置, 缺省固定在 DEFAULT_BRANCH。
-
-    刻意不读 GITHUB_REF_NAME: 本流水线归属 quote 分支 (checkout 步骤 ref: quote),
-    而 workflow_dispatch 从 Actions 页面触发时所在的是仓库默认分支 dev —— 若跟随
-    触发 ref 漂移, 就会出现「拉 quote 的内容、却递交到 dev」的错配。
     """
-    v = os.environ.get('QUOTE_BRANCH', '').strip()
-    if v:
-        return v
-    ref = os.environ.get('GITHUB_REF_NAME', '').strip()
-    if ref and ref != DEFAULT_BRANCH:
-        log.warning(
-            f'当前触发 ref 为 {ref}, 与固定目标分支 {DEFAULT_BRANCH} 不一致; '
-            f'如需递交到其它分支请显式设置 QUOTE_BRANCH'
-        )
     return DEFAULT_BRANCH
 
 
