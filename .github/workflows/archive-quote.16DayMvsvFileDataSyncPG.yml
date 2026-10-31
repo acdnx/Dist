@@ -40,7 +40,7 @@
 #     (注意: 开启后 partial 文件也会被删除, 被丢弃的行将不再有源文件可回溯);
 #   - 建议首轮 batchSize=50 / fileLimit=5 / enableDelete=false 试运行核对日志,
 #     确认入库与"待删除"清单无误后即可按默认的删除开关运行。
-name: collect-quote.06DayMvsvFileDataSyncPG
+name: archive-quote.16DayMvsvFileDataSyncPG
 
 on:
   schedule:
@@ -54,7 +54,7 @@ on:
       branch:
         description: "要处理的分支名"
         required: false
-        default: "collect-quote"
+        default: "archive-quote"
       batchSize:
         description: "数据库单批提交行数"
         required: false
