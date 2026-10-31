@@ -40,7 +40,7 @@
 #     (注意: 开启后 partial 文件也会被删除, 被丢弃的行将不再有源文件可回溯);
 #   - 建议首轮 batchSize=50 / fileLimit=5 / enableDelete=false 试运行核对日志,
 #     确认入库与"待删除"清单无误后即可按默认的删除开关运行。
-name: archive-quote.06DayMvsvFileDataSyncPG
+name: archive-quote.16DayMvsvFileDataSyncPG
 
 on:
   schedule:
@@ -54,7 +54,7 @@ on:
       branch:
         description: "要处理的分支名"
         required: false
-        default: "quote"
+        default: "archive-quote"
       batchSize:
         description: "数据库单批提交行数"
         required: false
@@ -85,7 +85,7 @@ jobs:
       - name: CheckoutRepository
         uses: actions/checkout@v5
         with:
-          ref: 'quote'
+          ref: 'archive-quote'
           fetch-depth: 0
 
       - name: SetupPython
@@ -117,9 +117,9 @@ jobs:
           PG_SYNC_ENABLE_DELETE: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.enableDelete) || (vars.PG_SYNC_SCHEDULED_DELETE || 'true') }}
           # 删除 quote 分支源文件需本仓库 contents:write 令牌
           GIT_COMMIT_TOKEN: ${{ secrets.GIT_COMMIT_TOKEN }}
-          # 分支必须与 checkout 的 ref 一致（quote）：定时触发时 github.ref_name
+          # 分支必须与 checkout 的 ref 一致（archive-quote）：定时触发时 github.ref_name
           # 是默认分支而不是 quote，故显式回落 'quote'（否则删除会打到错分支）
-          CURR_BRANCH: ${{ inputs.branch || 'quote' }}
+          CURR_BRANCH: ${{ inputs.branch || 'archive-quote' }}
           PYTHONIOENCODING: utf-8
         shell: bash
         run: |
