@@ -39,11 +39,14 @@ jobs:
         env:
           QUOTE_CODES: ${{ github.event.inputs.codes }}
           GITHUB_TOKEN: ${{ secrets.GIT_COMMIT_TOKEN }}
-          # 固定目标分支, 与 checkout 的 ref 保持一致 (同 Task11)
-          # 不跟随触发 ref: workflow_dispatch 从 Actions 页面触发时默认是仓库默认分支 dev
-          QUOTE_BRANCH: quote
+          # 分支拆两个 (同一仓库), 不跟随触发 ref: workflow_dispatch 从 Actions 页面
+          # 触发时默认是仓库默认分支 dev
+          #   - 当前处理分支: Latest.mvsv 的读取与回填/裁剪写回, 与 checkout 的 ref 一致
+          #   - 日归档目标分支: 按日切分后的归档 .mvsv 写入分支
+          QUOTE_SOURCE_BRANCH: collect-quote
+          QUOTE_ARCHIVE_BRANCH: archive-quote
         run: python .github/Python/Quote/Task12ArchiveDaily.py
       - name: VerifyCleanPush
         run: |
-          git log origin/quote..HEAD --oneline | (! read)
+          git log origin/collect-quote..HEAD --oneline | (! read)
           git status --short | (! read)
