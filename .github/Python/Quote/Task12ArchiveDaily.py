@@ -109,7 +109,7 @@ FALLBACK_TZ_NAME = 'Asia/Shanghai'
 UTC = timezone.utc
 BJT_FIXED = timezone(timedelta(hours=8))  # 无 tzdata 时的最终兜底
 
-DEFAULT_BRANCH = 'collect-quote'
+DEFAULT_BRANCH = 'archive-quote'
 API_BASE_ENV = 'GITHUB_API_BASE'
 API_RETRY = 3
 API_RETRY_INTERVAL = 5
