@@ -25,6 +25,14 @@
 回退 Asia/Shanghai 并打日志)。按日切分以数据行的 d 字段为准, 同时校验 ts 按证券
 时区换算的日期与 d 是否一致, 不一致打 WARNING (上游步骤可能算错, 仅提醒不改数)。
 
+分支口径 (两个分支, 同一仓库):
+  - 当前处理分支 (QUOTE_SOURCE_BRANCH, 缺省 collect-quote): 读写
+    Data/Finv/SecurityQuoteV5/FTMM/Min/<Code>/Latest.mvsv, 即本脚本检出并运行的分支;
+  - 日归档目标分支 (QUOTE_ARCHIVE_BRANCH, 缺省 archive-quote): 写入按日切分后的
+    归档 .mvsv, 只增不删, 与 Latest 解耦。
+  拆分前只有一个分支 (旧变量 QUOTE_BRANCH), 归档与 Latest 落在同一分支, 归档分支
+  上没有 Data/... 基线时会出现「远端 Latest 不存在 -> 全部跳过」的静默空转。
+
 递交方式: 同 Task11 —— 优先走 GitHub Contents REST API 直写远端分支。
   本目录数据由外部作业高频提交, 本地 checkout 的 HEAD 随时可能落后, `git push`
   会因 non-fast-forward 被拒; Contents API 以服务端最新状态为处理基准
@@ -109,7 +117,11 @@ FALLBACK_TZ_NAME = 'Asia/Shanghai'
 UTC = timezone.utc
 BJT_FIXED = timezone(timedelta(hours=8))  # 无 tzdata 时的最终兜底
 
-DEFAULT_BRANCH = 'archive-quote'
+# 分支拆分: 本任务同时涉及同一仓库的两个分支
+#   - 当前处理分支: Latest.mvsv 的读取与回填/裁剪写回, 即脚本检出运行的分支
+#   - 日归档目标分支: 按日切分后的归档 .mvsv 的写入分支
+DEFAULT_SOURCE_BRANCH = 'collect-quote'
+DEFAULT_ARCHIVE_BRANCH = 'archive-quote'
 API_BASE_ENV = 'GITHUB_API_BASE'
 API_RETRY = 3
 API_RETRY_INTERVAL = 5
@@ -425,23 +437,30 @@ def resolveRepoSlug():
     return url[:-4] if url.endswith('.git') else url
 
 
-def resolveBranch():
-    """目标分支: 仅取显式配置, 缺省固定在 DEFAULT_BRANCH。
+def resolveSourceBranch():
+    """当前处理分支: Latest.mvsv 读取与写回的分支 (缺省 collect-quote)。
 
-    刻意不读 GITHUB_REF_NAME: 本流水线归属 quote 分支 (checkout 步骤 ref: quote),
-    而 workflow_dispatch 从 Actions 页面触发时所在的是仓库默认分支 dev —— 若跟随
-    触发 ref 漂移, 就会出现「拉 quote 的内容、却递交到 dev」的错配。
+    刻意不读 GITHUB_REF_NAME: 本流水线 checkout 的是处理分支, 而 workflow_dispatch
+    从 Actions 页面触发时所在的是仓库默认分支 dev —— 若跟随触发 ref 漂移, 就会
+    出现「拉 collect-quote 的内容、却递交到 dev」的错配。
+    旧变量 QUOTE_BRANCH 仅作为 source 的向后兼容别名 (拆分前它同时代表两者)。
     """
-    v = os.environ.get('QUOTE_BRANCH', '').strip()
+    v = os.environ.get('QUOTE_SOURCE_BRANCH', '').strip()
     if v:
         return v
-    ref = os.environ.get('GITHUB_REF_NAME', '').strip()
-    if ref and ref != DEFAULT_BRANCH:
+    legacy = os.environ.get('QUOTE_BRANCH', '').strip()
+    if legacy:
         log.warning(
-            f'当前触发 ref 为 {ref}, 与固定目标分支 {DEFAULT_BRANCH} 不一致; '
-            f'如需递交到其它分支请显式设置 QUOTE_BRANCH'
+            f'检测到旧变量 QUOTE_BRANCH={legacy}, 已按「当前处理分支」处理; '
+            f'请改用 QUOTE_SOURCE_BRANCH / QUOTE_ARCHIVE_BRANCH 分别指定'
         )
-    return DEFAULT_BRANCH
+        return legacy
+    return DEFAULT_SOURCE_BRANCH
+
+
+def resolveArchiveBranch():
+    """日归档目标分支: 归档 .mvsv 写入的分支 (缺省 archive-quote)。"""
+    return os.environ.get('QUOTE_ARCHIVE_BRANCH', '').strip() or DEFAULT_ARCHIVE_BRANCH
 
 
 def resolveApiBase():
@@ -610,17 +629,21 @@ def selectArchiveGroups(meta, rows, cfg, tz, today, clog):
     return groups
 
 
-def processCodeApi(code, cfg, branch, clog):
-    """API 模式: 以远端最新内容为基准处理, 全部经 Contents API 递交, 不写工作区。"""
+def processCodeApi(code, cfg, srcBranch, arcBranch, clog):
+    """API 模式: 以远端最新内容为基准处理, 全部经 Contents API 递交, 不写工作区。
+
+    Latest.mvsv 在 srcBranch (当前处理分支) 上读与写回; 日归档写入 arcBranch
+    (日归档目标分支), 两者同仓库、互不影响。
+    """
     latestRel = f'{DATA_REL}/{code}/{LATEST_NAME}'
     archived = []
     latestCommitted = False
 
     # Latest 冲突重试: 重新拉取远端内容, 重算回填+裁剪后再 PUT (归档只做一遍)
     for attempt in range(1, API_RETRY + 1):
-        sha, baseBytes = getRemoteFile(latestRel, branch)
+        sha, baseBytes = getRemoteFile(latestRel, srcBranch)
         if sha is None:
-            clog.info('远端 Latest.mvsv 不存在, 跳过')
+            clog.info(f'远端 Latest.mvsv 不存在 (分支 {srcBranch}), 跳过')
             return
         meta, rows = parseMvsvText(baseBytes.decode('utf-8'))
         meta, rows, filled = prepareRows(meta, rows, clog)
@@ -632,7 +655,7 @@ def processCodeApi(code, cfg, branch, clog):
 
         # ③ 归档 (仅首轮执行; PUT 冲突在归档内部自行重试)
         if attempt == 1:
-            archived = archiveDaysApi(code, meta, rows, cfg, tz, today, branch, clog)
+            archived = archiveDaysApi(code, meta, rows, cfg, tz, today, arcBranch, clog)
 
         # ② 裁剪 + 写回 Latest
         kept, trimmed, cutoffDate = trimRows(rows, today, cfg['latest_window_days'], tz)
@@ -649,7 +672,7 @@ def processCodeApi(code, cfg, branch, clog):
             parts.append(f'trim {trimmed} rows')
         detail = '; '.join(parts) if parts else 'meta update'
         try:
-            putRemoteFile(latestRel, data, f'[Quote] Maintain FTMM Latest for {code} ({detail})', branch, sha)
+            putRemoteFile(latestRel, data, f'[Quote] Maintain FTMM Latest for {code} ({detail})', srcBranch, sha)
             latestCommitted = True
         except ShaConflict:
             clog.warning(f'Latest sha 冲突, 第 {attempt}/{API_RETRY} 次重拉重算')
@@ -662,8 +685,11 @@ def processCodeApi(code, cfg, branch, clog):
         clog.info('归档与 Latest 均无变化')
 
 
-def archiveDaysApi(code, meta, rows, cfg, tz, today, branch, clog):
-    """③ 归档 (API 模式): 逐日 merge 远端已归档文件, 内容无变化不递交。返回已递交日期列表。"""
+def archiveDaysApi(code, meta, rows, cfg, tz, today, arcBranch, clog):
+    """③ 归档 (API 模式): 逐日 merge 远端已归档文件, 内容无变化不递交。返回已递交日期列表。
+
+    归档文件的读与写都在 arcBranch (日归档目标分支) 上。
+    """
     groups = selectArchiveGroups(meta, rows, cfg, tz, today, clog)
     committed = []
     dayMeta = archiveMetaFor(meta)
@@ -671,7 +697,7 @@ def archiveDaysApi(code, meta, rows, cfg, tz, today, branch, clog):
         ds = day.strftime('%Y%m%d')
         rel = archiveRelPath(cfg['archive_rel'], meta, day)
         for attempt in range(1, API_RETRY + 1):
-            sha, baseBytes = getRemoteFile(rel, branch)
+            sha, baseBytes = getRemoteFile(rel, arcBranch)
             if baseBytes is not None:
                 _, exRows = parseMvsvText(baseBytes.decode('utf-8'))
             else:
@@ -682,7 +708,7 @@ def archiveDaysApi(code, meta, rows, cfg, tz, today, branch, clog):
                 clog.info(f'无变化跳过: {Path(rel).name} ({len(merged)} 行)')
                 break
             try:
-                putRemoteFile(rel, data, f'[Quote] Archive FTMM daily for {code} ({ds})', branch, sha)
+                putRemoteFile(rel, data, f'[Quote] Archive FTMM daily for {code} ({ds})', arcBranch, sha)
                 clog.info(f'归档: {Path(rel).name} ({len(dayRows)} 行 -> 合并后 {len(merged)} 行)')
                 committed.append(ds)
             except ShaConflict:
@@ -695,8 +721,18 @@ def archiveDaysApi(code, meta, rows, cfg, tz, today, branch, clog):
     return committed
 
 
-def processCodeLocal(code, cfg, branch, clog):
-    """降级模式 (无 GITHUB_TOKEN): 本地读写 + git add/commit/push, 仅本地/离线场景。"""
+def processCodeLocal(code, cfg, srcBranch, arcBranch, clog):
+    """降级模式 (无 GITHUB_TOKEN): 本地读写 + git add/commit/push, 仅本地/离线场景。
+
+    本地模式只有一个工作区, 归档与 Latest 只能落在同一个分支上; 若两个分支不同,
+    直接失败并提示改用 API 模式, 避免把归档静默写进处理分支 (拆分前正是这种静默错配)。
+    """
+    if srcBranch != arcBranch:
+        raise RuntimeError(
+            f'本地降级模式不支持双分支 (当前处理分支={srcBranch}, '
+            f'日归档目标分支={arcBranch}); 请配置 GITHUB_TOKEN 走 Contents API, '
+            f'或显式把两个分支设为同一个'
+        )
     latestPath = DATA_DIR / code / LATEST_NAME
     if not latestPath.exists():
         clog.info('Latest.mvsv 不存在, 跳过')
@@ -750,15 +786,15 @@ def processCodeLocal(code, cfg, branch, clog):
     sha = gitCommit(f'[Quote] Archive FTMM daily + Maintain Latest for {code} ({detail})')
     if sha:
         clog.info(f'commit: {sha}')
-    gitPush(branch)
+    gitPush(srcBranch)
 
 
-def processCode(code, cfg, branch):
+def processCode(code, cfg, srcBranch, arcBranch):
     clog = logging.getLogger(f'{TASK_NAME}.{code}')
     if apiEnabled():
-        processCodeApi(code, cfg, branch, clog)
+        processCodeApi(code, cfg, srcBranch, arcBranch, clog)
     else:
-        processCodeLocal(code, cfg, branch, clog)
+        processCodeLocal(code, cfg, srcBranch, arcBranch, clog)
 
 
 # ---------- 入口 ----------
@@ -780,9 +816,13 @@ def main():
     )
     log.info('=' * 50)
     cfg = loadConfig()
-    branch = resolveBranch()
+    srcBranch = resolveSourceBranch()
+    arcBranch = resolveArchiveBranch()
     log.info('任务十二: FTMM Latest 回填 + 按日归档 + 窗口裁剪')
-    log.info(f'递交方式: {"Contents API" if apiEnabled() else "本地 git (降级)"} / 分支: {branch}')
+    log.info(
+        f'递交方式: {"Contents API" if apiEnabled() else "本地 git (降级)"} / '
+        f'当前处理分支: {srcBranch} / 日归档目标分支: {arcBranch}'
+    )
     log.info(
         f'参数: ArchiveRel={cfg["archive_rel"]} LatestWindowDays={cfg["latest_window_days"]} '
         f'DailyArchiveAfterDays={cfg["daily_archive_after_days"]} '
@@ -797,14 +837,15 @@ def main():
     for code in codes:
         log.info(f'--- {code} 开始 ---')
         try:
-            processCode(code, cfg, branch)
+            processCode(code, cfg, srcBranch, arcBranch)
             log.info(f'--- {code} 完成 ---')
             ok += 1
         except Exception as e:
             log.error(f'{code} 失败: {e}')
             fail += 1
     if apiEnabled() and ok and not fail:
-        syncLocalToRemote(branch)
+        # 归档写向 arcBranch, 不影响本地 HEAD; 本地 HEAD 对齐的是处理分支
+        syncLocalToRemote(srcBranch)
     log.info(f'完成: 成功 {ok}, 失败 {fail}')
     if fail:
         sys.exit(1)
