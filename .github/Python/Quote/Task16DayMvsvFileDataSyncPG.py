@@ -1,0 +1,1689 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Task16 —— FTMM V5 行情文件增量同步到自建行情服务（Upsert REST API）
+========================================================================================
+
+一、工具定位
+----------------------------------------------------------------------------------------
+把本仓库 quote 分支 Archive/Finv/SecuQuote/FTMM/V5/ 下的 .mvsv 行情文件读取解析后，
+按批次（默认 500 行/批，可配置）以 HTTP Upsert
+（POST {BASE}/OpenAPI/V1/Meta/Finv/Quote/Cdeu/Min/Upsert?onConflict=update）
+增量写到另一台自建行情服务（FinvQuoteDataDeDup）的 PostgreSQL 表
+cdeu.finv_quote_secu_kline_min，作为 Supabase 入库数据的镜像副本。
+
+接口约定（请求体字段清单见 .github/Python/ApiUpsertBatchDelete.md，外部 OpenAPI
+契约见 FinvQuant 仓库 Docs/OpenAPI/Quote/Cdeu/Min/Upsert.md）：
+    - 请求体 {"items": [...]}，字段集合固定 17 列，接口侧 extra="forbid"，
+      多传任何未定义字段都会 422；
+    - 主键 (usc, ts)；onConflict=skip 只补缺 / onConflict=update 覆盖（默认）；
+    - 字段类型（对应表列）：`ts` 为 **bigint**，`date` / `time` 为 integer，
+      `open/high/low/close/last_close/pacd/change_price/change_ratio` 为
+      numeric(20,6)，`turnover` 为 numeric(30,8)。服务端保留 JSON 数字原文作为
+      参数文本，所以 **bigint 列必须下发整数**（`ts` 一律整数）；`volume` 自需求
+      10791（迁移 V200058）起已改为 numeric(20,6)，**小数成交量原样下发**，
+      不再截断为整数；
+    - 成功响应统一信封 {code, data, message}，业务字段在 data 节点：
+          {"code": 0, "data": {"affected": n, "mode": "skip|update"},
+           "message": "OK"}
+      code ∈ {0, 1, 200, 202} 均视为成功（服务端默认输出 0），其余 code 按业务
+      失败处理；data.affected / data.mode 缺失时按「未回传」记录，不误判成功；
+    - 失败响应为非 2xx + 错误信封（**不再套一层 data**）：
+          {"code": 211102, "message": "请求内存在重复主键", "detail": "...",
+           "request_id": "6f1c0f7a9d2e4b0c",
+           "error": {"code": 211102, "catalog_version": "finvquant-1",
+                     "retryable": false}}
+      日志会带上 code / detail / request_id；是否重试以 HTTP 状态（5xx / 429）
+      为主，error.retryable=true 时同样重试（211301 / 211302 等可重试错误）；
+    - 单次上限 Limits.MaxBatchRows（默认 5000）；413 时自动二分重发；
+    - 暂无鉴权，靠安全组/白名单限制来源 IP（GitHub Actions 出口 IP 需放行）。
+
+与 Task16DayMvsvFileDataSyncSupabase 的关系（同一份数据、两个目的地）：
+    - 本脚本**完全自包含**：源目录、文件命名规则、排序、列映射、环境变量读取
+      等工具一律在本文件内实现（见 §六），不 import 任何同目录脚本，
+      因此删除 / 重命名 Supabase 脚本不会影响本脚本运行；
+    - 两条链路的读取口径（目录、文件名排序、fileLimit 语义）必须保持一致，
+      本脚本对数据行采用容错解析 parse_mvsv_rows（见 §三），
+      修改任一侧的目录 / 列映射时请同步另一侧；
+    - 日志分块：每个文件执行前后各打印一行 `===== [i/N] 开始/结束：... =====`
+      （块头带序号与路径，块尾带序号、结果与耗时），长日志里可直接看出每个文件
+      的批次循环边界，不会与相邻文件的 ✅ / ❌ / ⚠️ 混在一起；块内各行
+      （📄 解析 / 各批次 / 汇总）**不再重复打印长路径**，靠块头块尾定位；
+    - 源文件删除：**默认开启**；单个文件全部批次成功后删除 quote 分支上的该源文件
+      （需 GIT_COMMIT_TOKEN，缺失即退出 1）。删除相关清单（待删除 / 删除成功 /
+      远端已不存在 / 删除失败）一律**完整逐条打印，不折叠成「其余 N 个同上」**，
+      便于与远端实际剩余文件逐条对账。删除策略：
+          1) 优先 **Git Data API 批量删除**：PG_SYNC_DELETE_BATCH_SIZE 个文件（默认 100）
+             压成 1 条 commit，各批**相互隔离**：某批失败只回退该批去逐文件兜底，
+             不影响后续批次继续按批删除（除非批量方案整体不可用或全部批次都失败）；
+          2) 批量失败的文件（该批报错 / 非快进重试耗尽 / 端点或权限不可用）
+             自动回退到**逐文件 Contents API 兜底**，已有源文件不会被漏删；
+      PG_SYNC_ENABLE_DELETE=false/0 时降级为安全模式，只打印待删除清单；
+    - 删除是安全的：文件解析异常 / 任一批次失败一律保留；partial 文件仅在
+      PG_SYNC_ALLOW_PARTIAL 开启（即不视为失败）时才删；
+    - 删除发生在全部写请求完成之后，因此本步骤失败也不会出现「先删后写失败」；
+      删除失败只把退出码置 1（数据已落库，重跑 / 手工删除即可）；
+    - 删除是队列前进的前提（fileLimit 只取按日期升序的前 N 个），
+      关闭删除会每轮重复处理同一批。
+
+二、与 Supabase 入库的字段差异
+----------------------------------------------------------------------------------------
+    - 前收价：FTMM 的 LastClose 在 Supabase 表里探测 last_close / prev_close 落库，
+      本接口字段名固定为 last_close（需求 10794：原 prev_close 已改名），
+      故固定映射为 last_close；
+    - Supabase 走 PostgREST 的字段级 merge-duplicates（缺列不写），本接口
+      onConflict=update 是整行覆盖 —— 两者的载荷都来自同一份完整行，结果一致；
+    - 当日累计均价对外字段名为 pacd（库列名仍是 paocd），FTMM 文件里没有该列，
+      故不下发；
+    - 文件头缺列（空值）的行：Supabase 不写该列，本接口会写成 NULL（整行覆盖语义），
+      属于接口既有行为，已在文档 §2.5 中说明。
+
+三、数据合法性（下发前就地校验，绝不把脏数据打到目标库）
+----------------------------------------------------------------------------------------
+    - 必填：usc 非空且 ≤255、ts 为 ≥0 的整数；缺失/非法 → 整行丢弃并计为异常；
+    - date ∈ [19500101, 21001231]、time ∈ [0, 235959]；
+    - volume / turnover ≥ 0；数值列必须有限（NaN / Infinity 会被丢弃，
+      否则 json 序列化会生成非法 JSON）；volume 目标列已是 numeric(20,6)，
+      小数成交量原样保留；
+    - provider ≤255；未定义的键一律丢弃（接口 extra="forbid"）。
+    数据行解析采用「容错模式」（parse_mvsv_rows）：某一行数值非法只丢该行，
+    不放弃整份文件，并逐行报出行号与原因。
+
+    文件状态分三档：
+        ok       全部批次成功，无行/字段被丢弃；
+        partial  批次全部成功，但有行或字段被丢弃（数据不完整）；
+        failed   存在批次失败（网络 / 服务端 / 业务错误码 / affected 不符）或文件不可解析。
+
+四、环境变量（凭据与配置一律经环境注入，严禁写进源码或日志）
+----------------------------------------------------------------------------------------
+    URL_QUOTE_SYNC_BASE   目标服务基础地址（含协议与端口，如 http://1.2.3.4:16001；
+                          缺协议时按 http:// 补全）；缺失即致命退出
+    PG_SYNC_BATCH_SIZE    单请求提交行数（默认 500，上限 5000，超出自动收敛）
+    PG_SYNC_FILE_LIMIT    单次运行处理的文件数上限（默认 50，与 Supabase 任务取值对齐）
+    PG_SYNC_ON_CONFLICT   冲突策略 skip / update（默认 update，只接受这两个值）
+    PG_SYNC_TIMEOUT       单请求超时秒数（默认 60）
+    PG_SYNC_RETRIES       失败重试次数（默认 2；仅对网络错误 / 5xx / 429 重试）
+    PG_SYNC_ALLOW_PARTIAL "true"/"1" 时 partial 文件不算失败（默认严格：算失败）；
+                          partial 文件也只有在此时才会被删除
+    PG_SYNC_ENABLE_DELETE  删除开关，**默认开启**；设为 "false"/"0" 降级为安全模式
+                          （不调删除接口，只打印「待删除」清单，队列不会前进）
+    PG_SYNC_DELETE_BULK    "false"/"0" 时不用批量，直接逐文件删除
+                          （默认 true：优先批量，失败再兜底）
+    PG_SYNC_DELETE_BATCH_SIZE 批量删除时每个 commit 的文件数（默认 100，上限 1000）；
+                          600 个待删文件 → 6 批 × 100，每批 1 条 commit
+    GIT_COMMIT_TOKEN      删除用的 GitHub 令牌（需本仓库 contents:write）；
+                          开启删除但缺失即按失败退出
+    GIT_REPO_SLUG         可选，"owner/repo" 覆盖（默认从 .git/config 的 origin 解析）
+    GIT_API_BASE          可选，GitHub API 根（默认 https://api.github.com/repos；
+                          自测时指向本地假服务）
+    CURR_BRANCH / GITHUB_REF_NAME  或命令行第 1 参数：要处理的分支名（默认 quote）
+
+五、退出码
+----------------------------------------------------------------------------------------
+    0 = 全部文件完整镜像成功（删除开关开启时，还要求待删文件均删除成功）；
+        或目录里没有待同步文件；或仅有 partial 文件且 PG_SYNC_ALLOW_PARTIAL 已开启；
+    1 = 致命错误（URL 缺失 / 地址非法 / 分支未定）；存在 failed 文件；
+        存在 partial 文件而未开启 PG_SYNC_ALLOW_PARTIAL；
+        或删除开关开启后存在删除失败（数据已落库，重跑 / 手动删除可修复）。
+    说明：源文件只在「该文件全部批次成功」后才删除，因此退出码 1 不会丢数据。
+
+六、实现约束（自包含）
+----------------------------------------------------------------------------------------
+    本文件不依赖同目录任何 Python 模块：文件收集 / 列映射 / 分批 / 环境变量 /
+    控制台编码等工具都在下方就地实现，只用标准库。修改 FTMM V5 的目录或列格式时，
+    需要同时改本文件与 Task16 Supabase 脚本，两侧口径要保持一致。
+
+【环境要求】Python 3.8+，仅标准库；需能直连 URL_QUOTE_SYNC_BASE 指定的服务。
+"""
+
+import configparser
+import json
+import math
+import os
+import re
+import sys
+import time as time_module
+import urllib.error
+import urllib.parse
+import urllib.request
+
+# 本文件位于 <仓库根>/.github/Python/Quote/ 下。
+# 本脚本不 import 同目录任何脚本（含 Task16 Supabase），所需的解析 / 收集 / 分批 /
+# 环境变量工具全部在下方就地实现，仅用标准库。
+_HERE = os.path.dirname(os.path.abspath(__file__))       # <仓库根>/.github/Python/Quote
+
+# ---------------------------------------------------------------------------
+# 常量
+# ---------------------------------------------------------------------------
+
+# 目标服务接口（见 .github/Python/ApiUpsertBatchDelete.md §2）
+API_UPSERT_PATH = "/OpenAPI/V1/Meta/Finv/Quote/Cdeu/Min/Upsert"
+
+# 接口允许的 items 字段（extra="forbid"，多传即 422），顺序与契约文档
+# （FinvQuant Docs/OpenAPI/Quote/Cdeu/Min/Upsert.md 的 KLineItem）一致，
+# 便于对照契约与复现请求体。两个易踩坑的字段名：
+#   last_close —— 前收价（需求 10794：原 prev_close 已改名，旧名会被判未知字段）
+#   pacd       —— 当日累计均价（库列名仍是 paocd，对外字段名是 pacd）
+ITEM_FIELDS = (
+    "usc", "ts", "date", "time", "open", "high", "low", "close", "last_close",
+    "volume", "turnover", "change_price", "change_ratio", "pacd", "ext_field",
+    "remark", "provider",
+)
+ITEM_FIELD_SET = frozenset(ITEM_FIELDS)
+INT_FIELDS = ("ts", "date", "time")
+NON_NEGATIVE_FIELDS = ("volume", "turnover")
+TEXT_FIELDS = ("usc", "ext_field", "remark", "provider")
+TEXT_LIMITS = {"usc": 255, "provider": 255}   # 接口约束：usc / provider ≤ 255
+
+# 接口字段取值范围
+DATE_MIN, DATE_MAX = 19500101, 21001231        # yyyyMMdd
+TIME_MIN, TIME_MAX = 0, 235959                 # HHmmss
+
+# 前收价在目标接口里的字段名（FTMM 文件里叫 LastClose / 前收价）
+# 需求 10794 起接口字段为 last_close（库列同步改名），旧名 prev_close 不再接受
+LAST_CLOSE_TARGET_FIELD = "last_close"
+
+# 默认配置（可被环境变量覆盖）
+DEFAULT_BATCH_SIZE = 100
+DEFAULT_TIMEOUT = 60
+DEFAULT_RETRIES = 2
+DEFAULT_ON_CONFLICT = "update"
+ON_CONFLICT_CHOICES = ("skip", "update")
+MAX_BATCH_ROWS = 11000                          # Limits.MaxBatchRows 默认值
+
+# 外部 OpenAPI 成功信封的 code 取值（服务端默认输出 0，1 / 200 / 202 为兼容取值）
+SUCCESS_CODES = frozenset((0, 1, 200, 202))
+RETRY_BACKOFF_SECONDS = 3.0                    # 第 n 次重试前等待 n * backoff 秒
+
+# 日志中单次展示的异常样例条数（避免刷屏）
+SAMPLE_LIMIT = 5
+
+USER_AGENT = "Distribution-QuoteSync/1.0 (+https://github.com/ACANX/Distribution)"
+
+# 源文件删除（GitHub API）：默认开启，PG_SYNC_ENABLE_DELETE=false 关闭
+# 优先 Git Data API 批量（一次 commit 删一批）；失败的文件回退 Contents API 逐文件
+GITHUB_API_BASE = "https://api.github.com/repos"
+GITHUB_TIMEOUT = 30
+DELETE_COMMIT_MESSAGE = "[Task16PG] delete synced %s"
+REMOTE_FILE_ABSENT = "absent"                  # github_file_sha 的“文件不存在”哨兵
+
+# 批量删除（Git Data API）：优先一次 commit 删一批，失败的文件回退逐文件 Contents API
+DEFAULT_DELETE_BATCH_SIZE = 100                # 每个 commit 删除多少个文件（默认 100）
+MAX_DELETE_BATCH_SIZE = 1000                   # POST /git/trees 条目数硬上限（保守值）
+DEFAULT_BULK_RETRIES = 3                       # 非快进（分支被推进）时的重试次数
+BULK_RETRY_BACKOFF_SECONDS = 2.0
+DEFAULT_DELETE_BULK = True                     # 是否优先用批量（PG_SYNC_DELETE_BULK）
+
+# 源目录与文件名规则（quote 分支内相对路径）
+SOURCE_DIR = "Archive/Finv/SecuQuote/FTMM/V5"
+SRC_DATE_DIGITS = 8                             # 文件名尾段日期 yyyyMMdd 位数
+DEFAULT_FILE_LIMIT = 50                        # 单次文件数上限默认值
+DEFAULT_BRANCH = "quote"                       # 分支名默认值
+
+# 文件头字段名键：英文全名优先（# FieldName），中文名兜底（# 字段名称）
+FIELD_HEADER_KEYS = ("字段名称", "FieldName")
+
+# 前收价列在文件头里的键（英文 / 中文）
+LAST_CLOSE_KEYS = ("LastClose", "前收价")
+
+# mvsv 数据列（# FieldName 英文全名 / # 字段名称 中文名）→ 接口字段（wire 键）映射；
+# 数值列类型：int / float。短名 t 同时表示 Time 与 Turnover，故不采用 # Field 短名。
+COLUMN_TYPES = {
+    # 英文全名（# FieldName）
+    "Timestamp": ("ts", "int"),
+    "Date": ("date", "int"),
+    "Time": ("time", "int"),
+    "Open": ("open", "float"),
+    "High": ("high", "float"),
+    "Low": ("low", "float"),
+    "Close": ("close", "float"),
+    "Volume": ("volume", "float"),        # 接口 volume 为 numeric(20,6)，支持小数
+    "Turnover": ("turnover", "float"),
+    "ChangePrice": ("change_price", "float"),
+    "ChangeRatio": ("change_ratio", "float"),
+    # 中文名（# 字段名称，缺 # FieldName 时兜底）
+    "时间戳": ("ts", "int"),
+    "日期": ("date", "int"),
+    "时间": ("time", "int"),
+    "开盘价": ("open", "float"),
+    "最高价": ("high", "float"),
+    "最低价": ("low", "float"),
+    "收盘价": ("close", "float"),
+    "成交量": ("volume", "float"),          # 同上：支持小数成交量
+    "成交额": ("turnover", "float"),
+    "涨跌值": ("change_price", "float"),
+    "涨跌幅": ("change_ratio", "float"),
+}
+
+
+# ---------------------------------------------------------------------------
+# 通用工具（自包含实现，不依赖同目录脚本）
+# ---------------------------------------------------------------------------
+
+_console_configured = False
+
+
+def _ensure_console_utf8():
+    """把 stdout/stderr 重配置为 UTF-8（errors=replace），仅首次调用生效
+
+    防止 Windows 遗留控制台 / 非 UTF-8 locale 下输出中文时抛 UnicodeEncodeError
+    导致静默崩溃。重配置失败（如流已被重定向接管）时静默跳过。
+    """
+    global _console_configured
+    if _console_configured:
+        return
+    _console_configured = True
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+def unquote(value):
+    """去掉元信息取值外层成对的双引号"""
+    if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+        return value[1:-1]
+    return value
+
+
+def to_row(columns, values, column_types):
+    """把一行数据按文件头列序转为 wire 键 dict
+
+    :param columns: 列名列表（来自文件头 # FieldName / # 字段名称）
+    :param values: 该行的各列取值（未经 strip）
+    :param column_types: 文件头列名 → (wire 键, 类型) 映射
+    :return: 已赋值的记录 dict（空列不出现在 dict 中）
+    :raises ValueError: 数值列内容非法时抛出
+    """
+    row = {}
+    for i, raw_value in enumerate(values):
+        column = columns[i]
+        mapping = column_types.get(column)
+        if mapping is None:
+            continue
+        wire_key, value_type = mapping
+        value = raw_value.strip()
+        if not value:
+            continue  # 空列留空：不写入 dict，下发时即“该字段不写”
+        if value_type == "int":
+            try:
+                row[wire_key] = int(value)
+            except ValueError:
+                row[wire_key] = int(float(value))
+        else:
+            row[wire_key] = float(value)
+    return row
+
+
+def chunks(source, size):
+    """把列表切成固定大小的片"""
+    return [source[i:i + size] for i in range(0, len(source), size)]
+
+
+def natural_key(code):
+    """证券标识的自然排序键：数字段按数值比较，其余按小写字符串比较"""
+    parts = re.split(r"(\d+)", code)
+    key = []
+    for part in parts:
+        if not part:
+            continue
+        if part.isdigit():
+            key.append((0, int(part), ""))
+        else:
+            key.append((1, 0, part.lower()))
+    return key
+
+
+def collect_mvsv_files(root):
+    """收集 SOURCE_DIR 下可同步的 .mvsv 文件并按（文件名日期, 证券标识自然排序）升序
+
+    递归遍历、排除 "." 开头的隐藏目录与隐藏文件；文件名须为
+    {Region}_{Market}_{USC}_{TypeKLine}_{Provider}_Day_{yyyyMMdd}.mvsv（尾段 8 位
+    数字日期），不满足者跳过并记日志。
+
+    :param root: 仓库根目录
+    :return: [(rel_path, date, code), ...] 已按日期升序、证券标识自然排序升序
+    """
+    base = os.path.join(root, *SOURCE_DIR.split("/"))
+    entries = []
+    if not os.path.isdir(base):
+        print("⚠️ 源目录不存在：%s" % base)
+        return entries
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for name in filenames:
+            if name.startswith(".") or not name.lower().endswith(".mvsv"):
+                continue
+            rel_path = os.path.relpath(os.path.join(dirpath, name), root)
+            rel_path = rel_path.replace(os.sep, "/")
+            stem = os.path.splitext(name)[0]
+            segs = stem.split("_")
+            date_str = segs[-1] if segs else ""
+            # 去掉末尾的 {TypeKLine}_{Provider}_Day_{yyyyMMdd} 4 段作为证券标识
+            code = "_".join(segs[:-4]) if len(segs) > 4 else stem
+            if len(segs) < 4 or len(date_str) != SRC_DATE_DIGITS \
+                    or not date_str.isdigit():
+                print("⏭️ 跳过（文件名不符合 {Region}_{Market}_{USC}_{TypeKLine}"
+                      "_{Provider}_Day_{8位日期} 模式）：%s" % rel_path)
+                continue
+            entries.append((rel_path, int(date_str), code))
+    entries.sort(key=lambda e: (e[1], natural_key(e[2])))
+    return entries
+
+
+def repo_root():
+    """返回仓库根目录（绝对路径）；本脚本固定位于 <仓库根>/.github/Python/Quote/ 下
+
+    即 Quote/ → Python/ → .github/ → 仓库根：从 _HERE 起上溯三级。
+    """
+    return os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
+
+
+def resolve_branch():
+    """解析要处理的分支名：命令行参数 → CURR_BRANCH → GITHUB_REF_NAME → 默认 quote"""
+    if len(sys.argv) > 1 and sys.argv[1].strip():
+        return sys.argv[1].strip()
+    for env_key in ("CURR_BRANCH", "GITHUB_REF_NAME"):
+        value = os.environ.get(env_key, "").strip()
+        if value:
+            return value
+    return DEFAULT_BRANCH
+
+
+def env_int(name, default):
+    """读取整数型环境变量；非法值告警后取默认值"""
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError
+        return parsed
+    except ValueError:
+        print("⚠️ 环境变量 %s=%r 不是正整数，回退默认值 %d" % (name, value, default))
+        return default
+
+
+def env_bool(name, default=False):
+    """读取布尔型环境变量（"true"/"1"/"yes"/"on" 为真，大小写不敏感）"""
+    value = os.environ.get(name, "").strip().lower()
+    if not value:
+        return default
+    return value in ("true", "1", "yes", "on")
+
+
+# ---------------------------------------------------------------------------
+# 数值/字段校验
+# ---------------------------------------------------------------------------
+
+def _as_int(value):
+    """尽量把取值转为 int；无法转换或非有限值返回 None"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return int(number)
+
+
+def _as_float(value):
+    """尽量把取值转为 float；无法转换或非有限值返回 None"""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def build_column_types():
+    """解析前确定列映射：把 FTMM 的前收价映射到接口字段 last_close
+
+    与 Supabase 链路不同，这里不需要探测目标表列（接口字段名由文档固定）。
+
+    :return: 可供 parse_mvsv/to_row 使用的列映射 dict
+    """
+    column_types = dict(COLUMN_TYPES)
+    for key in LAST_CLOSE_KEYS:
+        column_types[key] = (LAST_CLOSE_TARGET_FIELD, "float")
+    return column_types
+
+
+def sanitize_item(row):
+    """把一条 mvsv 记录转成接口 items 元素（就地校验，返回丢弃原因）
+
+    校验规则见模块文档 §三。返回的 item 里只含接口定义的字段。
+
+    :param row: parse_mvsv 产出的 wire 键 dict
+    :return: (item 或 None, 问题描述列表)
+             item 为 None 表示整行不可下发（必填 usc/ts 缺失或非法）；
+             问题描述非空但 item 非 None 表示个别可选字段被丢弃。
+    """
+    item = {}
+    problems = []
+
+    for key in row:
+        if key not in ITEM_FIELD_SET:
+            problems.append("未知字段 %s 已丢弃（接口 extra=forbid）" % key)
+
+    for key in ITEM_FIELDS:
+        if key not in row:
+            continue
+        value = row[key]
+
+        if key in TEXT_FIELDS:
+            text = "" if value is None else str(value).strip()
+            if not text:
+                problems.append("%s 为空，已丢弃" % key)
+                continue
+            limit = TEXT_LIMITS.get(key)
+            if limit is not None and len(text) > limit:
+                problems.append("%s 长度 %d 超过 %d，已丢弃"
+                                % (key, len(text), limit))
+                continue
+            item[key] = text
+            continue
+
+        if key in INT_FIELDS:
+            number = _as_int(value)
+            if number is None:
+                problems.append("%s=%r 不是整数，已丢弃" % (key, value))
+                continue
+            if key == "ts" and number < 0:
+                problems.append("ts=%d 为负，整行丢弃" % number)
+                return None, problems
+            if key == "date" and not (DATE_MIN <= number <= DATE_MAX):
+                problems.append("date=%d 超出 [%d, %d]，已丢弃"
+                                % (number, DATE_MIN, DATE_MAX))
+                continue
+            if key == "time" and not (TIME_MIN <= number <= TIME_MAX):
+                problems.append("time=%d 超出 [%d, %d]，已丢弃"
+                                % (number, TIME_MIN, TIME_MAX))
+                continue
+            item[key] = number
+            continue
+
+        # 其余均为数值列（last_close/open/high/low/close/pacd/volume/turnover/...）
+        number = _as_float(value)
+        if number is None:
+            problems.append("%s=%r 不是有效数值，已丢弃" % (key, value))
+            continue
+        if key in NON_NEGATIVE_FIELDS and number < 0:
+            problems.append("%s=%s 为负，已丢弃" % (key, number))
+            continue
+        item[key] = number
+
+    # 必填项校验（接口 422 的直接来源）
+    if not item.get("usc"):
+        problems.append("缺少必填字段 usc，整行丢弃")
+        return None, problems
+    if "ts" not in item:
+        problems.append("缺少必填字段 ts，整行丢弃")
+        return None, problems
+    return item, problems
+
+
+# ---------------------------------------------------------------------------
+# HTTP 客户端
+# ---------------------------------------------------------------------------
+
+class SyncRequestError(Exception):
+    """目标服务返回不可重试的错误（4xx / 校验失败 / affected 不符）"""
+
+
+class RetryableError(Exception):
+    """网络错误 / 5xx / 429：可以退避后重试"""
+
+
+class PayloadTooLargeError(Exception):
+    """413：批量超过服务端上限，需拆分后重发"""
+
+
+def normalize_base_url(value):
+    """规范化目标服务基础地址：补协议、去尾部斜杠、校验主机名
+
+    :param value: URL_QUOTE_SYNC_BASE 原始取值
+    :return: 可拼接路径的基础地址（如 http://1.2.3.4:16001）
+    :raises ValueError: 地址为空或无法解析
+    """
+    text = (value or "").strip()
+    if not text:
+        raise ValueError("目标服务地址为空（URL_QUOTE_SYNC_BASE）")
+    if "://" not in text:
+        print("⚠️ URL_QUOTE_SYNC_BASE 未带协议，按 http:// 补全")
+        text = "http://" + text
+    parsed = urllib.parse.urlparse(text)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("目标服务地址不合法（URL_QUOTE_SYNC_BASE=%r）" % text)
+    return text.rstrip("/")
+
+
+def post_json(url, body_bytes, timeout):
+    """发送 POST JSON 请求，返回 (status, text)；网络层失败抛 OSError
+
+    HTTP 错误码属于服务端正常应答，原样返回给调用方判定。
+    """
+    request = urllib.request.Request(
+        url, data=body_bytes, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:      # 先捕 HTTPError（URLError 的子类）
+        return e.code, e.read().decode("utf-8", errors="replace")
+
+
+class QuoteSyncClient:
+    """目标行情服务 Upsert 接口的最小客户端（仅标准库 urllib）
+
+    负责：URL 拼接、请求体序列化、状态码语义（413 拆分、5xx/429/
+    error.retryable 退避重试）、成功信封解析（code / data.affected / data.mode）
+    与错误信封解析（message / detail / request_id）。暂无鉴权，服务端靠来源 IP
+    白名单。
+    """
+
+    def __init__(self, base_url, on_conflict=DEFAULT_ON_CONFLICT,
+                 timeout=DEFAULT_TIMEOUT, retries=DEFAULT_RETRIES):
+        self.base_url = normalize_base_url(base_url)
+        if on_conflict not in ON_CONFLICT_CHOICES:
+            raise ValueError("onConflict 只接受 %s，当前为 %r"
+                             % ("/".join(ON_CONFLICT_CHOICES), on_conflict))
+        self.on_conflict = on_conflict
+        self.timeout = timeout
+        self.retries = max(0, retries)
+
+    def upsert_url(self):
+        """拼接 Upsert 完整 URL（含 onConflict 查询参数）"""
+        return "%s%s?onConflict=%s" % (
+            self.base_url, API_UPSERT_PATH,
+            urllib.parse.quote(self.on_conflict, safe=""))
+
+    def upsert(self, items):
+        """提交一批 items；遇到 413 自动二分重试
+
+        :param items: 已通过 sanitize_item 校验的记录列表
+        :return: dict {"affected": int|None, "mode": str|None, "requests": int}
+                 affected 为 None 表示服务端未回传可解析的数值
+        :raises SyncRequestError: 不可重试错误或重试耗尽
+        """
+        try:
+            return self._upsert_once(items)
+        except PayloadTooLargeError:
+            if len(items) <= 1:
+                raise SyncRequestError("单行请求仍返回 413，服务端批量上限过小")
+            middle = len(items) // 2
+            print("⚠️ 目标服务返回 413（批量过大），拆分为 %d + %d 行重试"
+                  % (middle, len(items) - middle))
+            left = self.upsert(items[:middle])
+            right = self.upsert(items[middle:])
+            return merge_upsert_results(left, right)
+
+    def _upsert_once(self, items):
+        """单批提交（内部按 retries 做退避重试）"""
+        body = json.dumps({"items": items}, ensure_ascii=False,
+                          allow_nan=False).encode("utf-8")
+        url = self.upsert_url()
+        last_error = None
+
+        for attempt in range(self.retries + 1):
+            if attempt:
+                wait = RETRY_BACKOFF_SECONDS * attempt
+                print("⏳ 第 %d/%d 次重试前等待 %.1fs" % (attempt, self.retries, wait))
+                time_module.sleep(wait)
+            try:
+                status, text = post_json(url, body, self.timeout)
+            except OSError as e:                       # 含 URLError / TimeoutError
+                last_error = "网络错误: %s" % e
+                print("⚠️ 提交 %d 行失败：%s" % (len(items), last_error))
+                continue
+
+            if 200 <= status < 300:
+                return parse_upsert_response(text, len(items))
+
+            detail, retryable = parse_error_response(status, text)
+            if status == 413:
+                raise PayloadTooLargeError(detail)
+            if retryable or status == 429 or status >= 500:
+                last_error = detail
+                print("⚠️ 提交 %d 行失败：%s" % (len(items), last_error))
+                continue
+            raise SyncRequestError(detail)
+
+        raise SyncRequestError("重试 %d 次后仍失败（%s）" % (self.retries, last_error))
+
+
+def snippet(text, limit=300):
+    """截断响应体，避免错误日志刷屏"""
+    body = (text or "").strip().replace("\n", " ")
+    return body[:limit] + ("..." if len(body) > limit else "")
+
+
+def load_json_object(text):
+    """尽力把响应体解析成 dict；空体 / 非 JSON / 非对象一律返回 None"""
+    if not (text or "").strip():
+        return None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def unwrap_response(data):
+    """拆开成功响应信封 {code, data, message}
+
+    :param data: 已 json 解析的响应体（任意类型）
+    :return: (业务数据 dict 或 None, code 或 None, message 或 None)
+             业务数据取信封的 data 节点；若服务端仍是旧版平铺结构
+             {"affected": n, "mode": "..."}（无信封），则顶层 dict 即业务数据
+    """
+    if not isinstance(data, dict):
+        return None, None, None
+
+    code = data.get("code")
+    if isinstance(code, bool) or not isinstance(code, int):
+        code = None
+    message = data.get("message")
+    if not isinstance(message, str):
+        message = None
+
+    payload = data.get("data")
+    if not isinstance(payload, dict):
+        # 兼容旧版平铺结构（无信封）：仅当顶层出现业务字段时才当作业务数据
+        payload = data if ("affected" in data or "mode" in data) else None
+    return payload, code, message
+
+
+def parse_error_response(status, text):
+    """解析失败响应信封，产出（一行可读描述, 是否可重试）
+
+    错误信封形如{"code": 211102, "message": "...", "detail": "...",
+    "request_id": "...", "error": {"code": ..., "retryable": false}}
+    （非 2xx 时不再套一层 data）。结构不符合预期时退化为
+    「HTTP <status>：<响应体片段>」，且不额外判定为可重试。
+
+    :param status: HTTP 状态码
+    :param text: 响应体
+    :return: (描述字符串, error.retryable 是否为 true)
+    """
+    data = load_json_object(text)
+    if data is None:
+        return "HTTP %s：%s" % (status, snippet(text)), False
+
+    parts = ["HTTP %s" % status]
+    code = data.get("code")
+    if isinstance(code, int) and not isinstance(code, bool):
+        parts.append("code=%d" % code)
+    # detail 与 message 内容常常重复，优先取 detail
+    reason = None
+    for key in ("detail", "message"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            reason = value.strip()
+            break
+    parts.append(reason if reason is not None else snippet(text))
+    request_id = data.get("request_id")
+    if isinstance(request_id, str) and request_id.strip():
+        parts.append("request_id=%s" % request_id.strip())
+
+    error = data.get("error")
+    retryable = isinstance(error, dict) and error.get("retryable") is True
+    if retryable:
+        parts.append("retryable=true")
+    return "，".join(parts), retryable
+
+
+def parse_upsert_response(text, submitted):
+    """解析 Upsert 成功响应信封
+
+    期望结构：{"code": 0, "data": {"affected": n, "mode": "skip|update"},
+              "message": "OK"}
+
+    - code 不在 SUCCESS_CODES 内时按业务失败处理（即使 HTTP 是 2xx）；
+    - 兼容旧版平铺结构 {"affected": n, "mode": "..."}；
+    - update 模式下 affected 应当等于提交行数；若服务端明确回传更小的值，
+      说明有行没有落库，按失败处理（skip 模式的小值是预期行为）。
+
+    :param text: 响应体
+    :param submitted: 本次提交的行数
+    :return: dict {"affected": int|None, "mode": str|None, "requests": 1}
+    :raises SyncRequestError: 业务错误码 / 回传 affected 与 update 语义不符
+    """
+    data = load_json_object(text)
+    payload, code, message = unwrap_response(data)
+    if code is not None and code not in SUCCESS_CODES:
+        raise SyncRequestError("服务端返回业务错误 code=%d：%s"
+                               % (code, message or snippet(text)))
+    if payload is None:
+        return {"affected": None, "mode": None, "requests": 1}
+
+    affected = payload.get("affected")
+    if isinstance(affected, bool) or not isinstance(affected, int):
+        affected = None
+    mode = payload.get("mode")
+    if not isinstance(mode, str):
+        mode = None
+
+    if (mode or "update") != "skip" and affected is not None \
+            and affected < submitted:
+        raise SyncRequestError("回传 affected=%d 小于提交行数 %d"
+                               % (affected, submitted))
+    return {"affected": affected, "mode": mode, "requests": 1}
+
+
+def merge_upsert_results(left, right):
+    """合并一次 413 拆分后的两次写入结果（affected 未知则整体未知）"""
+    if left["affected"] is None or right["affected"] is None:
+        affected = None
+    else:
+        affected = left["affected"] + right["affected"]
+    return {
+        "affected": affected,
+        "mode": left["mode"] or right["mode"],
+        "requests": left["requests"] + right["requests"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# 解析（容错版）
+# ---------------------------------------------------------------------------
+
+def parse_mvsv_rows(path, column_types):
+    """解析 FTMM V5 行情文件：单行数值非法只丢该行，不放弃整份文件
+
+    列头 / 元信息规则与 Task16 Supabase 脚本的 parse_mvsv 完全一致（同样用
+    本文件的 unquote / FIELD_HEADER_KEYS / to_row），差异只在于数据行的数值解析
+    失败时不抛异常，而是把该行记入 bad_rows 继续解析——行情文件是机器生成的，
+    个别脏行不应让整份文件长期卡在队列里；但脏行仍会进日志并影响文件状态
+    （partial）。
+
+    :param path: 文件路径
+    :param column_types: 文件头列名 → (wire 键, 类型) 映射
+    :return: (记录列表, 脏行列表 [(行号, 原因)], 元数据 dict)
+    :raises ValueError: 文件头缺失 / 数据行出现在字段头之前 / 证券代码缺失
+    """
+    columns = None
+    meta = {}
+    rows = []
+    bad_rows = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line_no, raw in enumerate(f, 1):
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith("#"):
+                body = line[1:].strip()
+                if ":" not in body:
+                    continue
+                key, value = body.split(":", 1)
+                key = key.strip()
+                value = unquote(value.strip())
+                meta.setdefault(key, value)
+                if key in FIELD_HEADER_KEYS:
+                    columns = value.split("|")
+                continue
+            if columns is None:
+                raise ValueError("第 %d 行数据出现在 # FieldName 头之前" % line_no)
+            values = line.split("|")
+            if len(values) != len(columns):
+                bad_rows.append((line_no, "列数 %d 与字段头 %d 不符"
+                                 % (len(values), len(columns))))
+                continue
+            try:
+                rows.append(to_row(columns, values, column_types))
+            except (ValueError, TypeError) as e:
+                bad_rows.append((line_no, "数值非法（%s）" % e))
+
+    if columns is None:
+        raise ValueError("文件缺少 # FieldName / # 字段名称 元信息头")
+    if all(column not in column_types for column in columns):
+        # 典型情形：只有短名头（# 字段 : ts|d|t|...）——短名 t 同时表示 Time/Turnover，
+        # 无法安全映射；直接报清楚，避免“每行都缺 ts”这种二次伤害的日志
+        raise ValueError("文件头列名无法识别（需要 # FieldName 英文全名或 "
+                         "# 字段名称 中文名）：%s" % "|".join(columns))
+    usc = (meta.get("证券代码") or meta.get("SecuCode") or meta.get("USC") or "")
+    if not usc:
+        raise ValueError("文件头缺少 证券代码 / SecuCode / USC")
+    provider = meta.get("数据供应商") or meta.get("DataProvider") or ""
+    for row in rows:
+        row["usc"] = usc
+        if provider:
+            row["provider"] = provider
+    return rows, bad_rows, meta
+
+
+# ---------------------------------------------------------------------------
+# 源文件删除（GitHub Contents API，仅标准库）
+# ---------------------------------------------------------------------------
+
+def resolve_github_api_base():
+    """GitHub API 根：可用 GIT_API_BASE 覆盖（自测指向本地假服务）"""
+    value = os.environ.get("GIT_API_BASE", "").strip()
+    return (value or GITHUB_API_BASE).rstrip("/")
+
+
+def split_repo_slug(text):
+    """把 "owner/repo"（可带 .git / 前后斜杠）拆成 (owner, repo)
+
+    :return: (owner, repo)；无法拆成两段时返回 (None, None)
+    """
+    slug = (text or "").strip().strip("/")
+    if slug.endswith(".git"):
+        slug = slug[:-4]
+    parts = [part for part in slug.split("/") if part]
+    if len(parts) != 2:
+        return None, None
+    return parts[0], parts[1]
+
+
+def split_repo_from_url(url):
+    """从 git remote URL 解析 (owner, repo)：支持 https:// 与 git@host:owner/repo"""
+    text = (url or "").strip()
+    if not text:
+        return None, None
+    if "://" in text:
+        text = text.split("://", 1)[1]
+        text = text.split("/", 1)[1] if "/" in text else ""
+    elif text.startswith("git@") and ":" in text:
+        text = text.split(":", 1)[1]
+    return split_repo_slug(text)
+
+
+def load_owner_repo(root):
+    """解析本仓库 owner/repo：GIT_REPO_SLUG 优先，其次 .git/config 的 origin url
+
+    :param root: 仓库根目录
+    :return: (owner, repo)；无法解析时返回 (None, None)
+    """
+    env_slug = os.environ.get("GIT_REPO_SLUG", "").strip()
+    if env_slug:
+        return split_repo_slug(env_slug)
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(os.path.join(root, ".git", "config"), encoding="utf-8")
+    except (OSError, configparser.Error):
+        return None, None
+    for section in parser.sections():
+        if section.replace(" ", "").strip().lower() == 'remote"origin"':
+            return split_repo_from_url(parser.get(section, "url", fallback=""))
+    return None, None
+
+
+def github_request(method, url, token, body_bytes, timeout):
+    """最小 GitHub REST 调用
+
+    :return: (status, text, error)；网络层失败时 status=None、error 为原因
+    """
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": USER_AGENT,
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        headers["Authorization"] = "Bearer %s" % token
+    if body_bytes is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=body_bytes, method=method,
+                                     headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace"), None
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace"), None
+    except OSError as e:                        # 含 URLError / TimeoutError
+        return None, "", "网络错误: %s" % e
+
+
+def github_file_sha(api_base, owner, repo, path_key, branch, token, timeout):
+    """取远端文件 blob sha
+
+    :return: (sha, error)；error 非空表示失败；文件不存在时返回
+             (REMOTE_FILE_ABSENT, None) —— 调用方按「已处理」对待
+    """
+    url = "%s/%s/%s/contents/%s?ref=%s" % (
+        api_base, owner, repo, urllib.parse.quote(path_key, safe="/"),
+        urllib.parse.quote(branch, safe=""))
+    status, text, error = github_request("GET", url, token, None, timeout)
+    if error:
+        return None, error
+    if status == 404:
+        return REMOTE_FILE_ABSENT, None
+    if not 200 <= status < 300:
+        return None, "HTTP %s：%s" % (status, snippet(text))
+    try:
+        sha = json.loads(text).get("sha")
+    except (ValueError, AttributeError, TypeError):
+        return None, "响应不是合法 JSON 对象"
+    if not sha:
+        return None, "响应缺少 sha 字段"
+    return sha, None
+
+
+def delete_remote_file(api_base, owner, repo, branch, path_key, token,
+                       timeout=GITHUB_TIMEOUT):
+    """删除分支上的单个源文件（Contents API：GET sha → DELETE）
+
+    :return: dict {"success": bool, "already_gone": bool, "message": str|None}
+    """
+    def fail(message):
+        print("❌ 删除失败：%s/%s@%s %s —— %s"
+              % (owner, repo, branch, path_key, message))
+        return {"success": False, "already_gone": False, "message": message}
+
+    if not (token or "").strip():
+        return fail("令牌缺失（GIT_COMMIT_TOKEN）")
+
+    sha, error = github_file_sha(api_base, owner, repo, path_key, branch,
+                                 token, timeout)
+    if error:
+        return fail(error)
+    if sha == REMOTE_FILE_ABSENT:
+        print("⚠️ 远端文件已不存在（视为已处理）：%s" % path_key)
+        return {"success": True, "already_gone": True, "message": None}
+
+    url = "%s/%s/%s/contents/%s" % (
+        api_base, owner, repo, urllib.parse.quote(path_key, safe="/"))
+    body = json.dumps({
+        "message": DELETE_COMMIT_MESSAGE % path_key,
+        "sha": sha,
+        "branch": branch,
+    }, ensure_ascii=False).encode("utf-8")
+    status, text, error = github_request("DELETE", url, token, body, timeout)
+    if error:
+        return fail(error)
+    if 200 <= status < 300:
+        print("🗑️ 已删除源文件：%s（HTTP %s）" % (path_key, status))
+        return {"success": True, "already_gone": False, "message": None}
+
+    parsed = None
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        pass
+    reason = "HTTP %s" % status
+    if isinstance(parsed, dict) and parsed.get("message"):
+        reason = "%s：%s" % (reason, parsed["message"])
+    return fail(reason)
+
+
+def log_path_list(title, paths, limit=None):
+    """打印相对路径清单
+
+    默认 limit=None：**完整逐条输出，不省略、不折叠**。删除相关清单
+    （待删除 / 删除成功 / 远端已不存在 / 删除失败）都必须可逐条核对，
+    省略会让日志无法与远端实际剩余文件对账。
+    传入正整数时才截断为「前 limit 条 + 其余 N 个同上」。
+    """
+    if not paths:
+        return
+    print("%s（%d 个）：" % (title, len(paths)))
+    shown = paths if limit is None else paths[:limit]
+    for rel_path in shown:
+        print("    - %s" % rel_path)
+    if limit is not None and len(paths) > limit:
+        print("    - ……其余 %d 个同上" % (len(paths) - limit))
+
+
+# ---------------------------------------------------------------------------
+# 批量删除（Git Data API：一次 commit 删除一批文件）
+# ---------------------------------------------------------------------------
+#
+# 优先方案。逐文件 Contents API 删除是兜底方案（见 delete_remote_file）。
+# 一趟删除的调用数对比（每批 100 文件）：
+#   批量：GET ref + GET commit + POST tree + POST commit + PATCH ref = 5 次 / 1 条 commit
+#   兜底：每文件 GET sha + DELETE = 200 次 / 100 条 commit
+
+class BulkDeleteError(Exception):
+    """Git Data API 批量删除失败（该批路径回退逐文件删除，后续批照常按批删除）"""
+
+
+class BulkDeleteUnavailable(BulkDeleteError):
+    """批量删除方案整体不可用（认证/权限不足、端点不存在、tree 截断）
+
+    与普通批次失败区分：普通失败只回退该批，后续批次继续走批量；
+    本异常表示再试批量也没意义，剩余批次直接走逐文件兜底。
+    """
+
+
+class NonFastForwardError(BulkDeleteError):
+    """PATCH ref 非快进冲突（可重试：重取 ref → 重建 tree → 重建 commit）"""
+
+
+def github_api_call(api_base, method, api_path, token, body, timeout):
+    """调用 GitHub API（api_path 形如 /owner/repo/git/ref/heads/quote）
+
+    :return: (status, text)；网络层失败抛 BulkDeleteError
+    """
+    url = "%s%s" % (api_base.rstrip("/"), api_path)
+    body_bytes = None
+    if body is not None:
+        body_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    status, text, error = github_request(method, url, token, body_bytes, timeout)
+    if error:
+        raise BulkDeleteError("%s %s %s" % (method, api_path, error))
+    return status, text
+
+
+def _github_json(api_base, method, api_path, token, timeout, body=None,
+                 expect=(200, 201)):
+    """调用并解 JSON 对象；状态码不在 expect 内则抛错
+
+    401/403/404 归为 BulkDeleteUnavailable（令牌无效/权限不足/端点不存在），
+    其余状态码归为普通 BulkDeleteError（只影响当前批次）。
+    """
+    status, text = github_api_call(api_base, method, api_path, token, body,
+                                   timeout)
+    if status not in expect:
+        message = "%s %s 失败：HTTP %s：%s" % (method, api_path, status,
+                                              snippet(text))
+        if status in (401, 403, 404):
+            raise BulkDeleteUnavailable(message)
+        raise BulkDeleteError(message)
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        raise BulkDeleteError("%s %s 响应不是合法 JSON" % (method, api_path))
+    if not isinstance(payload, dict):
+        raise BulkDeleteError("%s %s 响应不是 JSON 对象" % (method, api_path))
+    return payload
+
+
+def github_repo_path(owner, repo, suffix):
+    """拼 /{owner}/{repo}{suffix}（owner/repo 转义，suffix 由调用方拼好）"""
+    return "/%s/%s%s" % (urllib.parse.quote(owner, safe=""),
+                         urllib.parse.quote(repo, safe=""), suffix)
+
+
+def github_branch_head(api_base, owner, repo, branch, token, timeout):
+    """取分支当前 commit sha（作为新 commit 的 parent）"""
+    api_path = github_repo_path(owner, repo, "/git/ref/heads/%s"
+                                % urllib.parse.quote(branch, safe="/"))
+    payload = _github_json(api_base, "GET", api_path, token, timeout)
+    sha = (payload.get("object") or {}).get("sha")
+    if not sha:
+        raise BulkDeleteError("GET ref 响应缺少 object.sha")
+    return sha
+
+
+def github_commit_tree(api_base, owner, repo, commit_sha, token, timeout):
+    """取 commit 对应的 tree sha（作为 base_tree）"""
+    api_path = github_repo_path(owner, repo, "/git/commits/%s" % commit_sha)
+    payload = _github_json(api_base, "GET", api_path, token, timeout)
+    sha = (payload.get("tree") or {}).get("sha")
+    if not sha:
+        raise BulkDeleteError("GET commit 响应缺少 tree.sha")
+    return sha
+
+
+def github_tree_paths(api_base, owner, repo, tree_sha, token, timeout):
+    """列出 tree 下所有 blob 路径（recursive=1）
+
+    tree 响应被截断时抛错（路径集合不完整，无法可靠判断文件是否存在）。
+    """
+    api_path = github_repo_path(owner, repo,
+                                "/git/trees/%s?recursive=1" % tree_sha)
+    payload = _github_json(api_base, "GET", api_path, token, timeout)
+    if payload.get("truncated"):
+        raise BulkDeleteUnavailable("tree %s 响应被截断（truncated=true），"
+                                    "无法可靠判断文件是否存在" % tree_sha)
+    return {entry.get("path") for entry in payload.get("tree") or []
+            if entry.get("type") == "blob"}
+
+
+def github_create_deletion_tree(api_base, owner, repo, base_tree, paths,
+                                token, timeout):
+    """在 tree 里把 paths 全部标记为删除（sha=null），返回新 tree sha"""
+    api_path = github_repo_path(owner, repo, "/git/trees")
+    body = {"base_tree": base_tree,
+            "tree": [{"path": path, "mode": "100644", "type": "blob",
+                       "sha": None} for path in paths]}
+    payload = _github_json(api_base, "POST", api_path, token, timeout, body)
+    sha = payload.get("sha")
+    if not sha:
+        raise BulkDeleteError("POST trees 响应缺少 sha")
+    return sha
+
+
+def github_create_commit(api_base, owner, repo, tree_sha, parent_sha, message,
+                         token, timeout):
+    """基于新 tree 与 parent 建 commit，返回 commit sha"""
+    api_path = github_repo_path(owner, repo, "/git/commits")
+    payload = _github_json(api_base, "POST", api_path, token, timeout,
+                           {"message": message, "tree": tree_sha,
+                            "parents": [parent_sha]})
+    sha = payload.get("sha")
+    if not sha:
+        raise BulkDeleteError("POST commits 响应缺少 sha")
+    return sha
+
+
+def github_update_branch(api_base, owner, repo, branch, commit_sha, token, timeout):
+    """把分支 ref 快进到新 commit；非快进（422）抛 NonFastForwardError"""
+    api_path = github_repo_path(owner, repo, "/git/refs/heads/%s"
+                                % urllib.parse.quote(branch, safe="/"))
+    status, text = github_api_call(api_base, "PATCH", api_path, token,
+                                   {"sha": commit_sha, "force": False}, timeout)
+    if 200 <= status < 300:
+        return
+    if status == 422:
+        raise NonFastForwardError("PATCH ref 被拒（分支已前进）：HTTP 422：%s"
+                                  % snippet(text))
+    if status in (401, 403, 404):
+        raise BulkDeleteUnavailable("PATCH ref 失败：HTTP %s：%s"
+                                    % (status, snippet(text)))
+    raise BulkDeleteError("PATCH ref 失败：HTTP %s：%s" % (status, snippet(text)))
+
+
+def delete_files_in_one_commit(api_base, owner, repo, branch, paths, token,
+                               batch_size=DEFAULT_DELETE_BATCH_SIZE,
+                               retries=DEFAULT_BULK_RETRIES,
+                               timeout=GITHUB_TIMEOUT,
+                               verify=True,
+                               message=None):
+    """优先方案：用 Git Data API 把一批文件压成一次 commit 删除
+
+    每批独立处理，批间完全隔离：
+      - 某批失败 → 只把该批路径放进 fallback（交给调用方逐文件兜底），
+        **不中断后续批次**，下一批照常按批删除；
+      - 只有当批量方案被判定整体不可用（BulkDeleteUnavailable：令牌权限不足 /
+        端点不存在 / tree 截断）时，剩余批次才直接进 fallback，不再每批白试；
+      - 即便所有批次都失败，调用方也会逐文件兑底，不会漏删。
+
+    :param batch_size: 每批（即每个 commit）删除的文件数，默认 100
+    :param verify: True 时先拉 recursive tree，跳过不存在的路径（不产生空 commit）
+    :return: dict {"deleted": [...], "missing": [...], "commits": [...],
+                   "fallback": [...], "fatal": str|None,
+                   "failed_batches": int, "total_batches": int}
+    """
+    targets = list(dict.fromkeys(paths))       # 去重保序
+    result = {"deleted": [], "missing": [], "commits": [],
+              "fallback": [], "fatal": None,
+              "failed_batches": 0, "total_batches": 0}
+    if not targets:
+        return result
+
+    total_batches = (len(targets) + batch_size - 1) // batch_size
+    result["total_batches"] = total_batches
+    for index, chunk in enumerate(chunks(targets, batch_size), 1):
+        if result["fatal"]:
+            result["fallback"].extend(chunk)
+            continue
+        print("批量删除 第 %d/%d 批：%d 个文件"
+              % (index, total_batches, len(chunk)))
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                head = github_branch_head(api_base, owner, repo, branch, token,
+                                          timeout)
+                tree_sha = github_commit_tree(api_base, owner, repo, head, token,
+                                              timeout)
+                batch_paths = chunk
+                missing = []
+                if verify:
+                    existing = github_tree_paths(api_base, owner, repo, tree_sha,
+                                                 token, timeout)
+                    batch_paths = [p for p in chunk if p in existing]
+                    missing = [p for p in chunk if p not in existing]
+                if not batch_paths:
+                    print("⚠️ 本批 %d 个文件在 %s@%s 上都不存在，跳过（不产生空 commit）"
+                          % (len(chunk), repo, branch))
+                    result["missing"].extend(missing)
+                    break
+
+                new_tree = github_create_deletion_tree(
+                    api_base, owner, repo, tree_sha, batch_paths, token, timeout)
+                new_commit = github_create_commit(
+                    api_base, owner, repo, new_tree, head,
+                    message or "[Task16PG] delete %d synced files"
+                    % len(batch_paths), token, timeout)
+                try:
+                    github_update_branch(api_base, owner, repo, branch,
+                                         new_commit, token, timeout)
+                except NonFastForwardError as error:
+                    if attempt > retries:
+                        raise BulkDeleteError("非快进冲突重试 %d 次仍失败：%s"
+                                              % (retries, error))
+                    wait = BULK_RETRY_BACKOFF_SECONDS * attempt
+                    print("⚠️ %s；重取 ref 后重试（第 %d/%d 次，等待 %.1fs）"
+                          % (error, attempt, retries, wait))
+                    time_module.sleep(wait)
+                    continue
+            except BulkDeleteUnavailable as error:
+                # 批量方案整体不可用：本批及剩余批次全部改走逐文件兜底
+                result["failed_batches"] += 1
+                print("❌ 批量删除第 %d/%d 批失败（批量方案不可用）：%s"
+                      % (index, total_batches, error))
+                print("   剩余 %d 批全部改为逐文件删除（不漏删，只多耗接口次数）"
+                      % (total_batches - index + 1))
+                result["fallback"].extend(chunk)
+                if not result["fatal"]:
+                    result["fatal"] = "%s" % error
+                break
+            except BulkDeleteError as error:
+                # 单批失败：只回退该批，后续批次继续按批删除
+                result["failed_batches"] += 1
+                print("❌ 批量删除第 %d/%d 批失败：%s"
+                      % (index, total_batches, error))
+                print("   该批 %d 个文件回退逐文件删除；后续批次继续按批删除"
+                      % len(chunk))
+                result["fallback"].extend(chunk)
+                break
+
+            print("🗑️ 批量删除成功：commit=%s，删除 %d 个文件（尝试 %d 次）"
+                  % (new_commit[:8], len(batch_paths), attempt))
+            result["deleted"].extend(batch_paths)
+            result["missing"].extend(missing)
+            result["commits"].append(new_commit)
+            break
+    return result
+
+
+# ---------------------------------------------------------------------------
+# 单文件同步
+# ---------------------------------------------------------------------------
+
+def sync_file(client, root, rel_path, batch_size, column_types, show_path=True):
+    """把一份行情文件的全部记录分批同步到目标服务，逐批记录明细
+
+    单批失败不中断后续批次——跑完才能给出完整失败清单；Upsert 幂等，重跑无副作用。
+
+    :param client: QuoteSyncClient
+    :param root: 仓库根目录
+    :param rel_path: 文件相对路径（quote 分支内）
+    :param batch_size: 单批行数
+    :param column_types: 文件头列名 → (wire 键, 类型) 映射
+    :param show_path: 是否在日志行里带文件路径。批量主流程由
+                      `===== [i/N] 开始/结束 =====` 块头块尾标注当前文件，
+                      故传 False 避免每行重复长路径；单文件调用保持默认 True。
+    :return: 文件级汇总 dict：
+             {"rel_path", "parsed", "dropped_rows", "dropped_fields", "batches",
+              "status", "failure_digest"}，status 取 ok / partial / failed
+    :raises Exception: 文件头不可解析 / 无可下发数据时抛出（未发过写请求）
+    """
+    local_path = os.path.join(root, *rel_path.split("/"))
+    rows, bad_rows, _meta = parse_mvsv_rows(local_path, column_types)
+    if not rows and not bad_rows:
+        raise ValueError("解析结果为空，文件可能已损坏")
+
+    items = []
+    dropped_records = []
+    dropped_fields = []
+    for record_no, row in enumerate(rows, 1):
+        item, problems = sanitize_item(row)
+        if item is None:
+            dropped_records.append((record_no, problems))
+            continue
+        if problems:
+            dropped_fields.append((record_no, problems))
+        items.append(item)
+
+    dropped_rows = len(bad_rows) + len(dropped_records)
+    print("📄 %s解析 %d 行，脏行 %d 行，可同步 %d 行，整行丢弃 %d 行（含脏行），"
+          "字段丢弃 %d 行"
+          % ("%s：" % rel_path if show_path else "",
+             len(rows) + len(bad_rows), len(bad_rows), len(items),
+             dropped_rows, len(dropped_fields)))
+    log_samples("脏行", bad_rows)
+    log_samples("整行丢弃", dropped_records, unit="条记录")
+    log_samples("字段丢弃", dropped_fields, unit="条记录")
+
+    if not items:
+        raise ValueError("全部行都未通过校验，无可下发数据")
+
+    batches = []
+    for batch_no, chunk in enumerate(chunks(items, batch_size), 1):
+        batches.append(upsert_batch(client, batch_no, chunk))
+    return summarize_file(rel_path, len(rows) + len(bad_rows), dropped_rows,
+                          len(dropped_fields), batches, show_path=show_path)
+
+
+def log_samples(title, entries, unit="行"):
+    """打印异常样例（最多 SAMPLE_LIMIT 条），其余仅给总数
+
+    :param title: 分类名（脏行 / 整行丢弃 / 字段丢弃）
+    :param entries: [(编号, 原因字符串或原因列表), ...]
+    :param unit: 编号的含义（行号 / 记录序号）
+    """
+    if not entries:
+        return
+    for number, problems in entries[:SAMPLE_LIMIT]:
+        detail = problems if isinstance(problems, str) else "；".join(problems)
+        print("   ⚠️ %s 第 %d %s：%s" % (title, number, unit, detail))
+    if len(entries) > SAMPLE_LIMIT:
+        print("   ⚠️ %s 其余 %d 条同上，不再逐条打印"
+              % (title, len(entries) - SAMPLE_LIMIT))
+
+
+def upsert_batch(client, batch_no, chunk):
+    """提交一个批次并返回明细（失败只记录，不抛出）"""
+    try:
+        result = client.upsert(chunk)
+        error = None
+    except Exception as e:
+        result = {"affected": None, "mode": None, "requests": 0}
+        error = "%s" % e
+
+    outcome = {
+        "batch_no": batch_no,
+        "submitted": len(chunk),
+        "affected": result["affected"],
+        "mode": result["mode"],
+        "requests": result["requests"],
+        "error": error,
+    }
+    print("%s 第 %d 批 %s" % ("✅" if error is None else "❌", batch_no,
+                             describe_batch(outcome)))
+    return outcome
+
+
+def describe_batch(outcome):
+    """生成一行可读的批次明细"""
+    affected = outcome["affected"]
+    affected_text = "未知" if affected is None else str(affected)
+    suffix = "" if outcome["error"] is None else "，原因：%s" % outcome["error"]
+    return ("提交 %d 行：affected=%s（mode=%s，请求 %d 次）%s"
+            % (outcome["submitted"], affected_text, outcome["mode"] or "未回传",
+               outcome["requests"], suffix))
+
+
+def summarize_file(rel_path, parsed, dropped_rows, dropped_fields, batches,
+                   show_path=True):
+    """生成文件级汇总与状态（ok / partial / failed）
+
+    - failed：任一批次失败（网络/服务端/affected 不符）；
+    - partial：批次均成功但有行或字段被丢弃；
+    - ok：完整镜像。
+    """
+    failed_batches = [b for b in batches if b["error"] is not None]
+    if failed_batches:
+        status = "failed"
+    elif dropped_rows or dropped_fields:
+        status = "partial"
+    else:
+        status = "ok"
+
+    submitted = sum(b["submitted"] for b in batches)
+    affected_known = [b["affected"] for b in batches if b["affected"] is not None]
+    affected_unknown = any(b["affected"] is None for b in batches)
+    affected_text = ("至少 %d" % sum(affected_known)) if affected_unknown \
+        else str(sum(affected_known))
+
+    digest_parts = []
+    if failed_batches:
+        digest_parts.append("；".join("第 %d 批: %s" % (b["batch_no"], b["error"])
+                                      for b in failed_batches))
+    if dropped_rows:
+        digest_parts.append("整行丢弃 %d 行" % dropped_rows)
+    if dropped_fields:
+        digest_parts.append("字段丢弃 %d 行" % dropped_fields)
+    digest = "；".join(digest_parts)
+
+    icon = {"ok": "✅", "partial": "⚠️", "failed": "❌"}[status]
+    print("%s %s汇总：解析 %d 行，提交 %d 行，affected %s，批次 %d（失败 %d）→ %s%s"
+          % (icon, "%s " % rel_path if show_path else "", parsed, submitted,
+             affected_text, len(batches), len(failed_batches), status.upper(),
+             "（完整同步）" if status == "ok" else "（详见上方 ⚠️ / ❌ 日志）"))
+    return {
+        "rel_path": rel_path,
+        "parsed": parsed,
+        "dropped_rows": dropped_rows,
+        "dropped_fields": dropped_fields,
+        "batches": batches,
+        "status": status,
+        "failure_digest": digest,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 主流程
+# ---------------------------------------------------------------------------
+
+def env_int_zero(name, default):
+    """读取非负整数型环境变量；非法值告警后取默认值"""
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        parsed = int(value)
+        if parsed < 0:
+            raise ValueError
+        return parsed
+    except ValueError:
+        print("⚠️ 环境变量 %s=%r 不是非负整数，回退默认值 %d" % (name, value, default))
+        return default
+
+
+def resolve_on_conflict():
+    """读取冲突策略（skip / update），非法值回落 update 并告警"""
+    value = os.environ.get("PG_SYNC_ON_CONFLICT", "").strip().lower()
+    if not value:
+        return DEFAULT_ON_CONFLICT
+    if value not in ON_CONFLICT_CHOICES:
+        print("⚠️ PG_SYNC_ON_CONFLICT=%r 非法（只接受 skip / update），回退 %s"
+              % (value, DEFAULT_ON_CONFLICT))
+        return DEFAULT_ON_CONFLICT
+    return value
+
+
+def main():
+    """主流程：配置 → 收集排序 → 逐文件分批 Upsert → 汇总"""
+    _ensure_console_utf8()
+    branch = resolve_branch()
+    batch_size = min(env_int("PG_SYNC_BATCH_SIZE", DEFAULT_BATCH_SIZE),
+                     MAX_BATCH_ROWS)
+    file_limit = env_int("PG_SYNC_FILE_LIMIT", DEFAULT_FILE_LIMIT)
+    timeout = env_int("PG_SYNC_TIMEOUT", DEFAULT_TIMEOUT)
+    retries = env_int_zero("PG_SYNC_RETRIES", DEFAULT_RETRIES)
+    on_conflict = resolve_on_conflict()
+    allow_partial = env_bool("PG_SYNC_ALLOW_PARTIAL", False)
+    enable_delete = env_bool("PG_SYNC_ENABLE_DELETE", True)
+    delete_bulk = env_bool("PG_SYNC_DELETE_BULK", DEFAULT_DELETE_BULK)
+    # 批大小可配（默认 100，至少 1，上限 1000）：600 个文件 → 6 批 × 1 条 commit
+    delete_batch_size = max(1, min(env_int("PG_SYNC_DELETE_BATCH_SIZE",
+                                           DEFAULT_DELETE_BATCH_SIZE),
+                                   MAX_DELETE_BATCH_SIZE))
+
+    print("======== 自建行情服务同步开始（Task16 / FTMM V5 / PG）========")
+    print("分支 (branch) = %s" % branch)
+    print("批大小 (batchSize) = %d，文件数上限 (fileLimit) = %d，冲突策略 (onConflict) = %s"
+          % (batch_size, file_limit, on_conflict))
+    print("超时 (timeout) = %ds，重试 (retries) = %d，允许部分同步 (allowPartial) = %s"
+          % (timeout, retries, "是" if allow_partial else "否（默认严格）"))
+    print("删除开关 (enableDelete) = %s"
+          % ("开（同步成功后删除源文件）" if enable_delete
+             else "关（安全模式：只列待删除清单）"))
+    if enable_delete:
+        print("删除策略 = %s"
+              % (("优先批量（每批 %d 个 / 1 条 commit），失败的文件回退逐文件"
+                  % delete_batch_size) if delete_bulk
+                 else "逐文件（Contents API，每条 1 个 commit）"))
+
+    base_url = os.environ.get("URL_QUOTE_SYNC_BASE", "").strip()
+    if not base_url:
+        print("❌ 缺少 URL_QUOTE_SYNC_BASE 环境变量（目标服务基础地址，"
+              "如 http://1.2.3.4:16001），无法同步")
+        return 1
+    try:
+        client = QuoteSyncClient(base_url, on_conflict=on_conflict,
+                                 timeout=timeout, retries=retries)
+    except ValueError as e:
+        print("❌ %s" % e)
+        return 1
+    print("目标服务 = %s" % client.base_url)
+
+    column_types = build_column_types()
+    root = repo_root()
+    print("仓库根 = %s" % root)
+
+    all_files = collect_mvsv_files(root)
+    print("收集完成：FTMM/V5 目录下可同步的 .mvsv 共 %d 个（按文件名日期升序、证券标识自然排序）"
+          % len(all_files))
+    if not all_files:
+        print("没有可同步的 .mvsv 文件，无事可做")
+        return 0
+    picked = all_files[:file_limit]
+    if len(picked) < len(all_files):
+        print("本次按 fileLimit=%d 只处理前 %d 个，其余 %d 个留待下次："
+              % (file_limit, len(picked), len(all_files) - len(picked)))
+        for rel_path, _d, _c in all_files[file_limit:]:
+            print("    - %s" % rel_path)
+    print("-------- 本次处理清单（%d 个）--------" % len(picked))
+    for idx, (rel_path, date, code) in enumerate(picked, 1):
+        print("  %2d. %s（日期=%d，标识=%s）" % (idx, rel_path, date, code))
+
+    failed_files, partial_files = [], []
+    ok_files, partial_paths = [], []
+    total_picked = len(picked)
+    # 每个文件一个显式块：块头给序号 + 路径，块尾给序号 + 状态 + 耗时。
+    # 块内的日志行不再重复长路径，只以块头块尾定位当前文件；单文件独立调用
+    # sync_file() 时仍会带路径（show_path 默认 True）。
+    for idx, (rel_path, _date, _code) in enumerate(picked, 1):
+        print("===== [%d/%d] 开始：%s ====="
+              % (idx, total_picked, rel_path))
+        started = time_module.monotonic()
+        try:
+            outcome = sync_file(client, root, rel_path, batch_size, column_types,
+                                show_path=False)
+        except Exception as e:
+            # 文件头不可解析 / 无可下发数据：没发过写请求，源文件必须保留
+            print("❌ 解析/同步过程异常：%s" % e)
+            failed_files.append("%s：%s" % (rel_path, e))
+            mark = "异常（源文件保留）"
+        else:
+            if outcome["status"] == "failed":
+                print("🔒 同步失败（批次未全部成功）：%s"
+                      % outcome["failure_digest"])
+                failed_files.append("%s：%s" % (rel_path, outcome["failure_digest"]))
+                mark = "失败（源文件保留）"
+            elif outcome["status"] == "partial":
+                print("⚠️ 部分同步（有行/字段被丢弃）：%s"
+                      % outcome["failure_digest"])
+                partial_files.append("%s：%s" % (rel_path, outcome["failure_digest"]))
+                partial_paths.append(rel_path)
+                mark = "部分同步（存在被丢弃的行/字段）"
+            else:
+                ok_files.append(rel_path)
+                mark = "成功（完整同步）"
+        print("===== [%d/%d] 结束：%s，耗时 %.1fs ====="
+              % (idx, total_picked, mark, time_module.monotonic() - started))
+
+    synced = len(picked) - len(failed_files) - len(partial_files)
+    print("======== 自建行情服务同步结束（Task16 / FTMM V5 / PG）========")
+    print("合计：文件 %d 份，完整同步 %d 份，部分同步 %d 份，失败 %d 份"
+          % (len(picked), synced, len(partial_files), len(failed_files)))
+
+    # ---- 源文件删除：只删「全部批次成功」的文件；partial 需显式放行 ----
+    candidates = list(ok_files)
+    if allow_partial and partial_paths:
+        print("⚠️ 已开启 PG_SYNC_ALLOW_PARTIAL：%d 个 partial 文件（含被丢弃的行/字段）"
+              "也会被删除，被丢弃的数据将不再有源文件可回溯" % len(partial_paths))
+        candidates.extend(partial_paths)
+
+    deleted, already_gone, delete_failed = [], [], []
+    bulk_deleted, bulk_commits = [], []
+    if candidates and not enable_delete:
+        print("🔒 删除开关关闭（PG_SYNC_ENABLE_DELETE）：%d 个文件保留不删"
+              % len(candidates))
+        log_path_list("待删除清单（开启删除后下一轮即可处理）", candidates)
+    elif candidates:
+        token = os.environ.get("GIT_COMMIT_TOKEN", "").strip()
+        api_base = resolve_github_api_base()
+        owner, repo = load_owner_repo(root)
+        if not token:
+            delete_failed.append("GIT_COMMIT_TOKEN 缺失（需要本仓库 contents:write 令牌）")
+        elif not (owner and repo):
+            delete_failed.append("未能解析本仓库 owner/repo（检查 .git/config 或设 GIT_REPO_SLUG）")
+        else:
+            print("-------- 删除源文件（%d 个，%s/%s@%s）--------"
+                  % (len(candidates), owner, repo, branch))
+            pending = list(candidates)
+
+            # 优先：Git Data API 一次 commit 删一批（每批 1 条 commit）
+            if delete_bulk:
+                print("—— 批量删除（Git Data API，每批 %d 个）——"
+                      % delete_batch_size)
+                bulk = delete_files_in_one_commit(
+                    api_base, owner, repo, branch, pending, token,
+                    batch_size=delete_batch_size,
+                    retries=DEFAULT_BULK_RETRIES, timeout=GITHUB_TIMEOUT)
+                bulk_deleted = bulk["deleted"]
+                bulk_commits = bulk["commits"]
+                already_gone.extend(bulk["missing"])
+                pending = bulk["fallback"]
+                if bulk["fatal"]:
+                    print("⚠️ 批量删除不可用（%s），剩余批次改用逐文件删除"
+                          % bulk["fatal"])
+                ok_batches = bulk["total_batches"] - bulk["failed_batches"]
+                print("批量删除合计：成功 %d/%d 批（%d 个文件，%d 条 commit）；"
+                      "失败 %d 批 → %d 个文件回退逐文件删除"
+                      % (ok_batches, bulk["total_batches"], len(bulk_deleted),
+                         len(bulk_commits), bulk["failed_batches"],
+                         len(pending)))
+
+            # 兜底：失败的（或未启用批量时的全部）逐文件 Contents API 删除
+            if pending:
+                print("—— 兜底：逐文件删除（%d 个）——" % len(pending))
+            for rel_path in pending:
+                result = delete_remote_file(api_base, owner, repo, branch,
+                                            rel_path, token)
+                if not result["success"]:
+                    delete_failed.append("%s：%s" % (rel_path, result["message"]))
+                elif result["already_gone"]:
+                    already_gone.append(rel_path)
+                else:
+                    deleted.append(rel_path)
+
+    if enable_delete:
+        print("删除合计：批量删除 %d 份（%d 条 commit），兜底逐文件删除 %d 份，"
+              "远端已不存在 %d 份，删除失败 %d 份"
+              % (len(bulk_deleted), len(bulk_commits), len(deleted),
+                 len(already_gone), len(delete_failed)))
+        # 除逐条日志外再给一份可核对的清单（完整输出，不省略）
+        log_path_list("删除成功清单（批量）", bulk_deleted)
+        log_path_list("删除成功清单（兜底逐文件）", deleted)
+        log_path_list("远端已不存在清单（无需再删）", already_gone)
+    else:
+        print("删除合计：删除开关关闭（安全模式），本次删除 0 份，保留待删 %d 份"
+              % len(candidates))
+
+    if partial_files:
+        print("部分同步清单（有行/字段被丢弃，数据不完整）：")
+        for item in partial_files:
+            print("    - %s" % item)
+    if failed_files:
+        print("失败清单（修复后重跑即可补齐，Upsert 幂等；源文件已保留）：")
+        for item in failed_files:
+            print("    - %s" % item)
+
+    if failed_files:
+        return 1
+    if partial_files and not allow_partial:
+        print("❌ 存在部分同步的文件：默认严格模式按失败返回；"
+              "若确认可接受，设 PG_SYNC_ALLOW_PARTIAL=true 降级为告警")
+        return 1
+    if delete_failed:
+        print("❌ 存在删除失败的源文件：数据已落库（Upsert 幂等），"
+              "可直接重跑本任务或手动删除对应文件")
+        log_path_list("删除失败清单", delete_failed)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

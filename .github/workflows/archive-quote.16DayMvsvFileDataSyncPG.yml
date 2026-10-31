@@ -1,0 +1,126 @@
+# 行情文件增量入库自建行情服务 PG + 验证后删除源文件:
+# 读取 quote 分支 Archive/Finv/SecuQuote/FTMM/V5/ 下的 .mvsv 行情文件, 解析后按
+# 批次(默认 100 行/批)以 HTTP Upsert 写入自建行情服务; 单个文件全部批次成功后,
+# 默认(删除开关 PG_SYNC_ENABLE_DELETE=true)删除 quote 分支上对应的源文件:
+#   优先 Git Data API 批量删除(默认每 100 个文件压成 1 条 commit, 可用
+#   PG_SYNC_DELETE_BATCH_SIZE / deleteBatchSize 调整), 批量失败的文件
+#   自动回退逐文件 Contents API 兜底; 各批互不影响, 任一批次失败则保留源文件
+#   (Upsert 幂等可重跑)。
+#   开关设 false / 带提交 enableDelete=false 时降级为只列清单。
+#   - Task06DayMvsvFileDataSyncSupabase: Day/ (SecuQuote 11 列格式)
+#   - Task16DayMvsvFileDataSyncPG: FTMM/V5/ 的同一批数据先增量镜像到自建行情服务
+#     (POST {URL_QUOTE_SYNC_BASE}/OpenAPI/V1/Meta/Finv/Quote/Cdeu/Min/Upsert,
+#      成功响应统一信封 {code, data{affected, mode}, message}(code 0/1/200/202 均算
+#      成功), 失败为非 2xx 错误信封 {code, message, detail, request_id, error};
+#      请求体字段见 .github/Python/ApiUpsertBatchDelete.md, 响应契约见 FinvQuant
+#      仓库 Docs/OpenAPI/Quote/Cdeu/Min/Upsert.md); 写成功后默认删除源文件:
+#      优先 Git Data API 批量(每批 PG_SYNC_DELETE_BATCH_SIZE 个 / 1 条 commit,
+#      默认 100; 某批失败只回退该批, 后续批次继续按批删),
+#      批量失败的文件回退逐文件 Contents API; partial 文件仅在
+#      PG_SYNC_ALLOW_PARTIAL 开启时才会被删; 关闭开关: PG_SYNC_ENABLE_DELETE=false
+#   - Task16DayMvsvFileDataSyncSupabase: FTMM/V5/ (FTMM 12 列格式, 按文件名日期升序)
+# 触发方式:
+#   - 定时触发: 每 5 小时自动运行一次(UTC 0/5/10/15/20 点的第 17 分, 即北京时间
+#     08:17 / 13:17 / 18:17 / 23:17 / 04:17), batchSize/fileLimit 取默认值;
+#     删除默认开启, 仓库变量 PG_SYNC_SCHEDULED_DELETE=false 可关闭
+#   - 手动触发: Actions 页 Run workflow, 各输入以页面填写为准
+#     (enableDelete 默认 true; 只对本次运行中全部批次成功的文件生效)
+# 注意:
+#   - 处理顺序按文件名日期升序, 同日期按证券代码自然排序;
+#   - 单次运行最多处理 fileLimit 个文件, 其余留待下次;
+#   - 删除目标为本仓库(ACANX/Distribution)的 quote 分支, 依赖 Secret
+#     GIT_COMMIT_TOKEN(需本仓库 contents:write 权限);
+#   - 依赖 Secrets: SUPABASE_PROJECT_REF / SUPABASE_KEY(Supabase Dashboard > Settings > API);
+#   - 依赖 Secrets: URL_QUOTE_SYNC_BASE(自建行情服务基础地址, 如 http://<实例IP>:16001,
+#     无鉴权, 服务端按来源 IP 白名单放行); 该 Secret 缺失时 Task16...PG 步骤直接失败;
+#   - 步骤顺序为 Task16DayMvsvFileDataSyncPG【删除已内置】→ (可选) Supabase 步骤:
+#     源文件只在「该文件全部批次成功」后才删, 所以写入失败不会丢数据
+#     (Upsert 幂等, 修复后重跑自动补齐); 若只是个别行/字段不合法导致 partial
+#     阻塞队列, 可配仓库变量 PG_SYNC_ALLOW_PARTIAL=true 把 partial 降级为告警
+#     (注意: 开启后 partial 文件也会被删除, 被丢弃的行将不再有源文件可回溯);
+#   - 建议首轮 batchSize=50 / fileLimit=5 / enableDelete=false 试运行核对日志,
+#     确认入库与"待删除"清单无误后即可按默认的删除开关运行。
+name: archive-quote.16DayMvsvFileDataSyncPG
+
+on:
+  schedule:
+    # 每 5 小时一次: UTC 0/5/10/15/20 点的第 17 分触发
+    # (= 北京时间 08:17 / 13:17 / 18:17 / 23:17 / 04:17)
+    # 注: 一天 24 小时无法被 5 整除, 20 点 -> 次日 0 点间隔为 4 小时,
+    # 属 cron 固有限制; GitHub 定时任务按 UTC 解析, 实际触发可能延迟数分钟
+    - cron: "17 */5 * * *"
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "要处理的分支名"
+        required: false
+        default: "archive-quote"
+      batchSize:
+        description: "数据库单批提交行数"
+        required: false
+        default: "121"
+      fileLimit:
+        description: "单次运行的文件数上限"
+        required: false
+        default: "500"
+      enableDelete:
+        description: "删除开关(默认开=全部批次成功的文件同步后就删; 首次上线建议先带 false 看清单)"
+        type: boolean
+        required: false
+        default: true
+      deleteBatchSize:
+        description: "批量删除时每个 commit 删除的文件数(默认 100; 600 个文件按 100 一批 = 6 条 commit)"
+        required: false
+        default: "100"
+
+permissions:
+  contents: write
+
+jobs:
+  QuoteDataSyncToPG:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: CheckoutRepository
+        uses: actions/checkout@v5
+        with:
+          ref: 'collect-quote'
+          fetch-depth: 0
+
+      - name: SetupPython
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # 先增量镜像到自建行情服务(PG): 与下面的 Supabase 步骤读取同一批 FTMM/V5
+      # 文件、同一 fileLimit; 本步骤不删除源文件, 失败即中断后续步骤(见文件头说明)
+      - name: Task16DayMvsvFileDataSyncPG
+        env:
+          URL_QUOTE_SYNC_BASE: ${{ secrets.URL_QUOTE_SYNC_BASE }}
+          # 定时触发无 inputs, 回落到各自默认值(100 / 150)
+          PG_SYNC_BATCH_SIZE: ${{ inputs.batchSize || '100' }}
+          PG_SYNC_FILE_LIMIT: ${{ inputs.fileLimit || '500' }}
+          PG_SYNC_ON_CONFLICT: update
+          PG_SYNC_TIMEOUT: "60"
+          PG_SYNC_RETRIES: "2"
+          # 删除策略: 优先 Git Data API 批量(每批 1 条 commit), 失败的文件回退逐文件
+          PG_SYNC_DELETE_BULK: "true"
+          # 每批(每个 commit)删除的文件数, 默认 100: 600 个文件 -> 6 批 x 1 条 commit;
+          # 各批相互隔离, 某批失败只回退该批逐文件, 不影响后续批次继续按批删
+          PG_SYNC_DELETE_BATCH_SIZE: ${{ inputs.deleteBatchSize || '100' }}
+          # 未配置仓库变量 = 严格模式: 有行/字段被丢弃(partial)也按失败返回
+          PG_SYNC_ALLOW_PARTIAL: ${{ vars.PG_SYNC_ALLOW_PARTIAL }}
+          # 删除开关(默认开): 手动触发取 inputs.enableDelete(boolean 先 format 成
+          # 字符串, 避免 false 在 &&/|| 里被当作短路值); 定时触发默认 true,
+          # 仓库变量 PG_SYNC_SCHEDULED_DELETE=false 可关闭
+          PG_SYNC_ENABLE_DELETE: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.enableDelete) || (vars.PG_SYNC_SCHEDULED_DELETE || 'true') }}
+          # 删除 quote 分支源文件需本仓库 contents:write 令牌
+          GIT_COMMIT_TOKEN: ${{ secrets.GIT_COMMIT_TOKEN }}
+          # 分支必须与 checkout 的 ref 一致（quote）：定时触发时 github.ref_name
+          # 是默认分支而不是 quote，故显式回落 'quote'（否则删除会打到错分支）
+          CURR_BRANCH: ${{ inputs.branch || 'quote' }}
+          PYTHONIOENCODING: utf-8
+        shell: bash
+        run: |
+          python3 .github/Python/Quote/Task16DayMvsvFileDataSyncPG.py
