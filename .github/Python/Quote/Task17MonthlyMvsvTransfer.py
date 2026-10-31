@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Task07 —— 月归档 MVSV 跨仓库转存
+Task17 —— 月归档 MVSV 跨仓库转存
 ================================================================================
 
 把**本仓库**(ACANX/Distribution, 采集归档端) quote 分支
@@ -81,10 +81,10 @@ news.PublishNewsFlashJsonl 同一套跨仓库约定(重要):
 
 用法
 ----
-    python3 .github/Python/Quote/Task07MonthlyMvsvTransfer.py --dry-run
-    python3 .github/Python/Quote/Task07MonthlyMvsvTransfer.py
-    python3 .github/Python/Quote/Task07MonthlyMvsvTransfer.py --month 202608
-    python3 .github/Python/Quote/Task07MonthlyMvsvTransfer.py --include-current
+    python3 .github/Python/Quote/Task17MonthlyMvsvTransfer.py --dry-run
+    python3 .github/Python/Quote/Task17MonthlyMvsvTransfer.py
+    python3 .github/Python/Quote/Task17MonthlyMvsvTransfer.py --month 202608
+    python3 .github/Python/Quote/Task17MonthlyMvsvTransfer.py --include-current
 
 依赖: 仅 Python 3 标准库 + 同仓 .github/Python/GitHubCommitContent.py
 """
