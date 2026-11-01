@@ -1,4 +1,4 @@
-# 标题 : SH000688 分钟级行情数据
+# 标题 : SH0688 分钟级行情数据
 # 字段名称 : "时间戳|日期|时间|开盘价|最高价|最低价|收盘价|成交量|成交额|涨跌值|涨跌幅|前收价"
 # DataProvider : FTMM
 # Field : "ts|da|ti|o|h|l|c|v|t|cp|cr|lc"
@@ -7,8 +7,8 @@
 # TypeKLine : Min
 # Count : 4465
 # Symbol : SH.000688
-# SecuCode : SH000688
-# USC : SH000688
+# SecuCode : SH0688
+# USC : SH0688
 # Name : 科创50
 # Region : CN
 # Market : SH
