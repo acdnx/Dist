@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 5061
+# Count : 5063
 # Symbol : SH.517400
 # SecuCode : 517400
 # USC : 517400
@@ -5076,3 +5076,5 @@
 1793602680|20261102|145800|1.23|||1.23|0|0|-0.028|-2.23|1.23
 1793602740|20261102|145900|1.23|||1.23|0|0|-0.028|-2.23|1.23
 1793602800|20261102|150000|1.23|||1.231|465500|573030.6|-0.027|-2.15|1.23
+1793669400|20261103|093000||||1.239|624600|773879|0.008|0.65|
+1793669460|20261103|093100|1.239|||1.249|1276200|1586923|0.018|1.46|1.239
