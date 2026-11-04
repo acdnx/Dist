@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 5302
+# Count : 5304
 # Symbol : SZ.000510
 # SecuCode : 000510
 # USC : 000510
@@ -5317,3 +5317,5 @@
 1793689080|20261103|145800|8.99|||8.99|500|4495|-0.28|-3.02|8.99
 1793689140|20261103|145900|8.99|||8.99|0|0|-0.28|-3.02|8.99
 1793689200|20261103|150000|8.99|||8.99|352800|3171672|-0.28|-3.02|8.99
+1793755800|20261104|093000||||9|287100|2583900|0.01|0.11|
+1793755860|20261104|093100|9|||8.8|1184300|10548305|-0.19|-2.11|9
