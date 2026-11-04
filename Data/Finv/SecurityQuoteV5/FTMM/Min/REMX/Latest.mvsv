@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 10920
+# Count : 10922
 # Symbol : US.REMX
 # SecuCode : REMX
 # USC : REMX
@@ -10935,3 +10935,5 @@
 1793739480|20261104|045800|49.785|||49.75|5085|252993.852|-0.51|-1.01|49.785
 1793739540|20261104|045900|49.75|||49.71|5804|288759.9|-0.55|-1.09|49.75
 1793739600|20261104|050000|49.71|||49.73|38987|1940483.969|-0.53|-1.05|49.71
+1793802660|20261104|223100||||51.775|24754|1282160.007|2.045|4.11|
+1793802720|20261104|223200|51.775|||51.82|3261|168792.787|2.09|4.20|51.775
