@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 11310
+# Count : 11312
 # Symbol : US.DAO
 # SecuCode : DAO
 # USC : DAO
@@ -11325,3 +11325,5 @@
 1793825880|20261105|045800|20.525|||20.525|47|969.26|0.795|4.03|20.525
 1793825940|20261105|045900|20.525|||20.525|0|0|0.795|4.03|20.525
 1793826000|20261105|050000|20.525|||20.69|1136|23529.67|0.96|4.87|20.525
+1793889060|20261105|223100||||20.69|103|2137.54|0|0.00|
+1793889120|20261105|223200|20.69|||20.69|0|0|0|0.00|20.69
