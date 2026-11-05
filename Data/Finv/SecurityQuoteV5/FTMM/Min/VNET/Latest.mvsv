@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 11310
+# Count : 11311
 # Symbol : US.VNET
 # SecuCode : VNET
 # USC : VNET
@@ -11325,3 +11325,4 @@
 1793825880|20261105|045800|3.485|||3.495|228683|797609.542|0.515|17.28|3.485
 1793825940|20261105|045900|3.495|||3.515|220696|774607.033|0.535|17.95|3.495
 1793826000|20261105|050000|3.515|||3.52|1388499|4891590.271|0.54|18.12|3.515
+1793889060|20261105|223100||||3.71|292075|1091111.495|0.19|5.40|
