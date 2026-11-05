@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 11310
+# Count : 11311
 # Symbol : US.SOXQ
 # SecuCode : SOXQ
 # USC : SOXQ
@@ -11325,3 +11325,4 @@
 1793825880|20261105|045800|80.46|||80.655|20923|1686978.675|-2.795|-3.35|80.46
 1793825940|20261105|045900|80.655|||80.7|16449|1326986.763|-2.75|-3.30|80.655
 1793826000|20261105|050000|80.7|||80.85|48192|3894016.719|-2.6|-3.12|80.7
+1793889060|20261105|223100||||76.87|52208|4022021.4|-3.98|-4.92|
