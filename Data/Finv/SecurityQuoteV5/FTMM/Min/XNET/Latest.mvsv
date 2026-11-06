@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 11700
+# Count : 11702
 # Symbol : US.XNET
 # SecuCode : XNET
 # USC : XNET
@@ -11715,3 +11715,5 @@
 1793912280|20261106|045800|3.1505|||3.16|3967|12550.96|-0.36|-10.23|3.1505
 1793912340|20261106|045900|3.16|||3.18|1773|5618.56|-0.34|-9.66|3.16
 1793912400|20261106|050000|3.18|||3.18|57192|181859.63|-0.34|-9.66|3.18
+1793975460|20261106|223100||||3.23|2128|6964.16|0.05|1.57|
+1793975520|20261106|223200|3.23|||3.23|25|82.625|0.05|1.57|3.23
