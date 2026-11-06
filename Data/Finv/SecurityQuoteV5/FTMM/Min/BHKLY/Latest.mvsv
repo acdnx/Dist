@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 11700
+# Count : 11701
 # Symbol : US.BHKLY
 # SecuCode : BHKLY
 # USC : BHKLY
@@ -11715,3 +11715,4 @@
 1793912280|20261106|045800|125.72|||125.72|1|125.476|1.75|1.41|125.72
 1793912340|20261106|045900|125.72|||125.72|3|378.54|1.75|1.41|125.72
 1793912400|20261106|050000|125.72|||125.72|3|378.48|1.75|1.41|125.72
+1793975460|20261106|223100||||125.72|1|122.03|0|0.00|
