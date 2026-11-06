@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 11700
+# Count : 11702
 # Symbol : US.VIPS
 # SecuCode : VIPS
 # USC : VIPS
@@ -11715,3 +11715,5 @@
 1793912280|20261106|045800|13.985|||13.99|19343|270648.583|0.22|1.60|13.985
 1793912340|20261106|045900|13.99|||13.995|50529|707244.017|0.225|1.63|13.99
 1793912400|20261106|050000|13.995|||13.97|302480|4227879.923|0.2|1.45|13.995
+1793975460|20261106|223100||||13.86|24338|335076.532|-0.11|-0.79|
+1793975520|20261106|223200|13.86|||13.783984|620|8545.954|-0.186016|-1.33|13.86
