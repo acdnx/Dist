@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 11700
+# Count : 11701
 # Symbol : US.KC
 # SecuCode : KC
 # USC : KC
@@ -11715,3 +11715,4 @@
 1793912280|20261106|045800|8.145|||8.15|37085|302232.436|0.05|0.62|8.145
 1793912340|20261106|045900|8.15|||8.17|26910|219462.788|0.07|0.86|8.15
 1793912400|20261106|050000|8.17|||8.17|88823|725767.156|0.07|0.86|8.17
+1793975460|20261106|223100||||8.415|12931|108873.846|0.245|3.00|
