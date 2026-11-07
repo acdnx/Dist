@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 44906
+# Count : 44909
 # Symbol : FX.CNHTWD
 # SecuCode : CNHTWD
 # USC : CNHTWD
@@ -44921,3 +44921,6 @@
 1794002040|20261107|055400|4.9177|||4.9177|0|0|-0.051|-1.03|4.9177
 1794002100|20261107|055500|4.9177|||4.913|0|0|-0.0557|-1.12|4.9177
 1794002160|20261107|055600|4.913|||4.913|0|0|-0.0557|-1.12|4.913
+1794002220|20261107|055700|4.913|||4.913|0|0|-0.0557|-1.12|4.913
+1794002280|20261107|055800|4.913|||4.913|0|0|-0.0557|-1.12|4.913
+1794002340|20261107|055900|4.913|||4.913|0|0|-0.0557|-1.12|4.913
