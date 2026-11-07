@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 44907
+# Count : 44909
 # Symbol : FX.CNYHKD
 # SecuCode : CNYHKD
 # USC : CNYHKD
@@ -44922,3 +44922,5 @@
 1794002100|20261107|055500|1.1743|||1.1743|0|0|-0.0017|-0.14|1.1743
 1794002160|20261107|055600|1.1743|||1.1743|0|0|-0.0017|-0.14|1.1743
 1794002220|20261107|055700|1.1743|||1.1743|0|0|-0.0017|-0.14|1.1743
+1794002280|20261107|055800|1.1743|||1.1742|0|0|-0.0018|-0.15|1.1743
+1794002340|20261107|055900|1.1742|||1.1743|0|0|-0.0017|-0.14|1.1742
