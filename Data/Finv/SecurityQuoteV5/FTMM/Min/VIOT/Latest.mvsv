@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 12087
+# Count : 12090
 # Symbol : US.VIOT
 # SecuCode : VIOT
 # USC : VIOT
@@ -12102,3 +12102,6 @@
 1793998500|20261107|045500|1.555|||1.555|4|6.17|0.045|2.98|1.555
 1793998560|20261107|045600|1.555|||1.555|10|15.22|0.045|2.98|1.555
 1793998620|20261107|045700|1.555|||1.555|6|9.08|0.045|2.98|1.555
+1793998680|20261107|045800|1.555|||1.555|6|9.18|0.045|2.98|1.555
+1793998740|20261107|045900|1.555|||1.53|265|405.55|0.02|1.32|1.555
+1793998800|20261107|050000|1.53|||1.55|660|1016.18|0.04|2.65|1.53
