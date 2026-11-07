@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 44907
+# Count : 44909
 # Symbol : FX.CNYCNH
 # SecuCode : CNYCNH
 # USC : CNYCNH
@@ -44922,3 +44922,5 @@
 1794002100|20261107|055500|0.99969|||0.99967|0|0|0.00012|0.01|0.99969
 1794002160|20261107|055600|0.99967|||0.99959|0|0|4e-05|0.00|0.99967
 1794002220|20261107|055700|0.99959|||0.99969|0|0|0.00014|0.01|0.99959
+1794002280|20261107|055800|0.99969|||0.99971|0|0|0.00016|0.02|0.99969
+1794002340|20261107|055900|0.99971|||0.99958|0|0|3e-05|0.00|0.99971
