@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 6266
+# Count : 6268
 # Symbol : SZ.000725
 # SecuCode : 000725
 # USC : 000725
@@ -6281,3 +6281,5 @@
 1794207480|20261109|145800|4.47|||4.47|245000|1095015|0.01|0.22|4.47
 1794207540|20261109|145900|4.47|||4.47|0|0|0.01|0.22|4.47
 1794207600|20261109|150000|4.47|||4.46|5677700|25322542|0|0.00|4.47
+1794274200|20261110|093000||||4.54|11680300|53028562|0.08|1.79|
+1794274260|20261110|093100|4.54|||4.52|31810600|144283729|0.06|1.35|4.54
