@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 6942
+# Count : 6944
 # Symbol : SZ.300413
 # SecuCode : 300413
 # USC : 300413
@@ -6957,3 +6957,5 @@
 1794209280|20261109|152800|35.8|||35.8|1200|42960|0|0.00|35.8
 1794209340|20261109|152900|35.8|||35.8|2200|78760|0|0.00|35.8
 1794209400|20261109|153000|35.8|||35.8|7800|279240|0|0.00|35.8
+1794274200|20261110|093000||||34.88|1559000|54377920|-0.92|-2.57|
+1794274260|20261110|093100|34.88|||35.39|4491537|156630300.9|-0.41|-1.15|34.88
