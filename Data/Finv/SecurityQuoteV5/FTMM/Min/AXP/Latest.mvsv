@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 12870
+# Count : 12872
 # Symbol : US.AXP
 # SecuCode : AXP
 # USC : AXP
@@ -12885,3 +12885,5 @@
 1794344280|20261111|045800|323.78|||323.91|17010|5509155.75|-0.4|-0.12|323.78
 1794344340|20261111|045900|323.91|||323.665|25089|8123364.73|-0.645|-0.20|323.91
 1794344400|20261111|050000|323.665|||323.46|525687|170048035.874|-0.85|-0.26|323.665
+1794407460|20261111|223100||||322|31833|10286506.42|-1.46|-0.45|
+1794407520|20261111|223200|322|||322.2|3375|1087731.459|-1.26|-0.39|322
