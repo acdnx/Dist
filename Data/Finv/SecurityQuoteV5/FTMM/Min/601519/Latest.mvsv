@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 6507
+# Count : 6509
 # Symbol : SH.601519
 # SecuCode : 601519
 # USC : 601519
@@ -6522,3 +6522,5 @@
 1794293880|20261110|145800|8.4|||8.4|0|0|0.11|1.33|8.4
 1794293940|20261110|145900|8.4|||8.4|0|0|0.11|1.33|8.4
 1794294000|20261110|150000|8.4|||8.4|715800|6012720|0.11|1.33|8.4
+1794360600|20261111|093000||||8.31|147300|1224063|-0.09|-1.07|
+1794360660|20261111|093100|8.31|||8.33|1050700|8744388|-0.07|-0.83|8.31
