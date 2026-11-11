@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 12870
+# Count : 12872
 # Symbol : US.UGL
 # SecuCode : UGL
 # USC : UGL
@@ -12885,3 +12885,5 @@
 1794344280|20261111|045800|42.47|||42.455|9904|420645.529|-2.385|-5.32|42.47
 1794344340|20261111|045900|42.455|||42.425|22641|961039.506|-2.415|-5.39|42.455
 1794344400|20261111|050000|42.425|||42.43|40041|1698979.716|-2.41|-5.37|42.425
+1794407460|20261111|223100||||42.408|24191|1026346.194|-0.022|-0.05|
+1794407520|20261111|223200|42.408|||42.395|6424|272388.366|-0.035|-0.08|42.408
