@@ -90,7 +90,7 @@ jobs:
       - name: CheckoutRepository
         uses: actions/checkout@v5
         with:
-          ref: 'collect-quote'
+          ref: 'archive-quote'
           fetch-depth: 0
 
       - name: SetupPython
