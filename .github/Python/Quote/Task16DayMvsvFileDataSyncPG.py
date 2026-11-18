@@ -36,11 +36,21 @@ cdeu.finv_quote_secu_kline_min，作为 Supabase 入库数据的镜像副本。
       日志会带上 code / detail / request_id；是否重试以 HTTP 状态（5xx / 429）
       为主，error.retryable=true 时同样重试（211301 / 211302 等可重试错误）；
     - 单次上限 Limits.MaxBatchRows（默认 5000）；413 时自动二分重发；
-    - 暂无鉴权，靠安全组/白名单限制来源 IP（GitHub Actions 出口 IP 需放行）。
+    - 鉴权：外部 OpenAPI 的「模式二：AK/SK 签名」（FinvQuant 仓库
+      Docs/API/OpenAPI/Auth.md §3），每次请求带
+          Authorization: META1-HMAC-SHA256 Credential=<AK>, Signature=<base64>
+          X-META-TS: <unix 秒>    X-META-Nonce: <随机串>
+      待签串 6 段 = METHOD \n PATH \n SORTED_QUERY \n BODY_SHA256 \n TIMESTAMP \n NONCE，
+      签名为 Base64(HMAC-SHA256(SK, 待签串))；重试 / 413 二分后重发都会重新
+      生成时间戳与 nonce（时间窗默认 300 秒、nonce 去重，复用旧值会被 19006 /
+      19007 拒绝）。签名工具见同目录 OpenApiAuthSign.py。
+      AK/SK 缺失时不带签名（服务端鉴权开关 19001=0 时仍可用），仅配置其中一个
+      视为配置错误直接退出 1。
 
 与 Task16DayMvsvFileDataSyncSupabase 的关系（同一份数据、两个目的地）：
-    - 本脚本**完全自包含**：源目录、文件命名规则、排序、列映射、环境变量读取
-      等工具一律在本文件内实现（见 §六），不 import 任何同目录脚本，
+    - 本脚本**基本自包含**：源目录、文件命名规则、排序、列映射、环境变量读取
+      等工具一律在本文件内实现（见 §六），唯一的同目录依赖是签名工具
+      OpenApiAuthSign.py（AK/SK 签名，供多个 upsert 脚本复用），
       因此删除 / 重命名 Supabase 脚本不会影响本脚本运行；
     - 两条链路的读取口径（目录、文件名排序、fileLimit 语义）必须保持一致，
       本脚本对数据行采用容错解析 parse_mvsv_rows（见 §三），
@@ -98,6 +108,10 @@ cdeu.finv_quote_secu_kline_min，作为 Supabase 入库数据的镜像副本。
 ----------------------------------------------------------------------------------------
     URL_QUOTE_SYNC_BASE   目标服务基础地址（含协议与端口，如 http://1.2.3.4:16001；
                           缺协议时按 http:// 补全）；缺失即致命退出
+    API_QUOTE_UPSERT_AK   外部 OpenAPI 的 AK（GitHub Secrets 同名注入，严禁写进
+    API_QUOTE_UPSERT_SK   源码或日志）；两者都存在即启用 META1-HMAC-SHA256 签名，
+                          都缺失则不带签名（服务端 19001=0 时可用），
+                          只配置其中一个按配置错误退出 1
     PG_SYNC_BATCH_SIZE    单请求提交行数（默认 500，上限 5000，超出自动收敛）
     PG_SYNC_FILE_LIMIT    单次运行处理的文件数上限（默认 50，与 Supabase 任务取值对齐）
     PG_SYNC_ON_CONFLICT   冲突策略 skip / update（默认 update，只接受这两个值）
@@ -127,11 +141,12 @@ cdeu.finv_quote_secu_kline_min，作为 Supabase 入库数据的镜像副本。
         或删除开关开启后存在删除失败（数据已落库，重跑 / 手动删除可修复）。
     说明：源文件只在「该文件全部批次成功」后才删除，因此退出码 1 不会丢数据。
 
-六、实现约束（自包含）
+六、实现约束（基本自包含）
 ----------------------------------------------------------------------------------------
-    本文件不依赖同目录任何 Python 模块：文件收集 / 列映射 / 分批 / 环境变量 /
-    控制台编码等工具都在下方就地实现，只用标准库。修改 FTMM V5 的目录或列格式时，
-    需要同时改本文件与 Task16 Supabase 脚本，两侧口径要保持一致。
+    除同目录的签名工具 OpenApiAuthSign.py 外，本文件不依赖任何其它同目录模块：
+    文件收集 / 列映射 / 分批 / 环境变量 / 控制台编码等工具都在下方就地实现，
+    只用标准库。修改 FTMM V5 的目录或列格式时，需要同时改本文件与 Task16
+    Supabase 脚本，两侧口径要保持一致。
 
 【环境要求】Python 3.8+，仅标准库；需能直连 URL_QUOTE_SYNC_BASE 指定的服务。
 """
@@ -146,6 +161,9 @@ import time as time_module
 import urllib.error
 import urllib.parse
 import urllib.request
+
+# 外部 OpenAPI AK/SK 签名（Auth.md §3 模式二）：本目录内复用模块，仅依赖标准库
+import OpenApiAuthSign
 
 # 本文件位于 <仓库根>/.github/Python/Quote/ 下。
 # 本脚本不 import 同目录任何脚本（含 Task16 Supabase），所需的解析 / 收集 / 分批 /
@@ -568,19 +586,21 @@ def normalize_base_url(value):
     return text.rstrip("/")
 
 
-def post_json(url, body_bytes, timeout):
+def post_json(url, body_bytes, timeout, extra_headers=None):
     """发送 POST JSON 请求，返回 (status, text)；网络层失败抛 OSError
 
     HTTP 错误码属于服务端正常应答，原样返回给调用方判定。
+    :param extra_headers: 附加请求头（AK/SK 签名头），None 表示不带
     """
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": USER_AGENT,
+    }
+    if extra_headers:
+        headers.update(extra_headers)
     request = urllib.request.Request(
-        url, data=body_bytes, method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": USER_AGENT,
-        },
-    )
+        url, data=body_bytes, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as resp:
             return resp.status, resp.read().decode("utf-8", errors="replace")
@@ -591,14 +611,15 @@ def post_json(url, body_bytes, timeout):
 class QuoteSyncClient:
     """目标行情服务 Upsert 接口的最小客户端（仅标准库 urllib）
 
-    负责：URL 拼接、请求体序列化、状态码语义（413 拆分、5xx/429/
-    error.retryable 退避重试）、成功信封解析（code / data.affected / data.mode）
-    与错误信封解析（message / detail / request_id）。暂无鉴权，服务端靠来源 IP
-    白名单。
+    负责：URL 拼接、请求体序列化、AK/SK 签名（可选）、状态码语义（413 拆分、
+    5xx/429/error.retryable 退避重试）、成功信封解析（code / data.affected /
+    data.mode）与错误信封解析（message / detail / request_id）。
+    AK/SK 同时提供才启用签名，否则按无鉴权请求（服务端鉴权开关 19001=0 时可用）。
     """
 
     def __init__(self, base_url, on_conflict=DEFAULT_ON_CONFLICT,
-                 timeout=DEFAULT_TIMEOUT, retries=DEFAULT_RETRIES):
+                 timeout=DEFAULT_TIMEOUT, retries=DEFAULT_RETRIES,
+                 access_key="", secret_key=""):
         self.base_url = normalize_base_url(base_url)
         if on_conflict not in ON_CONFLICT_CHOICES:
             raise ValueError("onConflict 只接受 %s，当前为 %r"
@@ -606,12 +627,18 @@ class QuoteSyncClient:
         self.on_conflict = on_conflict
         self.timeout = timeout
         self.retries = max(0, retries)
+        self.access_key = (access_key or "").strip()
+        self.secret_key = (secret_key or "").strip()
+        if bool(self.access_key) != bool(self.secret_key):
+            raise ValueError("AK/SK 必须同时提供（当前只配置了其中一个）")
+
+    def upsert_query(self):
+        """Upsert 查询串（不含前导 `?`）：URL 拼接与签名共用同一份取值"""
+        return "onConflict=%s" % urllib.parse.quote(self.on_conflict, safe="")
 
     def upsert_url(self):
         """拼接 Upsert 完整 URL（含 onConflict 查询参数）"""
-        return "%s%s?onConflict=%s" % (
-            self.base_url, API_UPSERT_PATH,
-            urllib.parse.quote(self.on_conflict, safe=""))
+        return "%s%s?%s" % (self.base_url, API_UPSERT_PATH, self.upsert_query())
 
     def upsert(self, items):
         """提交一批 items；遇到 413 自动二分重试
@@ -645,8 +672,15 @@ class QuoteSyncClient:
                 wait = RETRY_BACKOFF_SECONDS * attempt
                 print("⏳ 第 %d/%d 次重试前等待 %.1fs" % (attempt, self.retries, wait))
                 time_module.sleep(wait)
+            # 签名每次重算：时间戳落在服务端时间窗内、nonce 不重复
+            # （重试 / 413 二分后重发沿用旧时间戳或旧 nonce 会被 19006 / 19007 拒绝）
+            extra_headers = None
+            if self.access_key:
+                extra_headers = OpenApiAuthSign.build_auth_headers(
+                    "POST", API_UPSERT_PATH, self.upsert_query(), body,
+                    self.access_key, self.secret_key)
             try:
-                status, text = post_json(url, body, self.timeout)
+                status, text = post_json(url, body, self.timeout, extra_headers)
             except OSError as e:                       # 含 URLError / TimeoutError
                 last_error = "网络错误: %s" % e
                 print("⚠️ 提交 %d 行失败：%s" % (len(items), last_error))
@@ -1520,8 +1554,21 @@ def main():
               "如 http://1.2.3.4:16001），无法同步")
         return 1
     try:
+        access_key, secret_key = OpenApiAuthSign.load_credentials()
+    except OpenApiAuthSign.AuthConfigError as e:
+        print("❌ %s" % e)
+        return 1
+    if access_key:
+        print("鉴权 (auth) = AK/SK 签名模式，算法 %s，AK = %s"
+              % (OpenApiAuthSign.SIGN_ALGORITHM,
+                 OpenApiAuthSign.mask_access_key(access_key)))
+    else:
+        print("鉴权 (auth) = 无（未配置 API_QUOTE_UPSERT_AK / API_QUOTE_UPSERT_SK，"
+              "仅在服务端鉴权开关 19001=0 时可用）")
+    try:
         client = QuoteSyncClient(base_url, on_conflict=on_conflict,
-                                 timeout=timeout, retries=retries)
+                                 timeout=timeout, retries=retries,
+                                 access_key=access_key, secret_key=secret_key)
     except ValueError as e:
         print("❌ %s" % e)
         return 1

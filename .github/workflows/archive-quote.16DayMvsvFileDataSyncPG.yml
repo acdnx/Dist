@@ -31,8 +31,13 @@
 #   - 删除目标为本仓库(ACANX/Distribution)的 quote 分支, 依赖 Secret
 #     GIT_COMMIT_TOKEN(需本仓库 contents:write 权限);
 #   - 依赖 Secrets: SUPABASE_PROJECT_REF / SUPABASE_KEY(Supabase Dashboard > Settings > API);
-#   - 依赖 Secrets: URL_QUOTE_SYNC_BASE(自建行情服务基础地址, 如 http://<实例IP>:16001,
-#     无鉴权, 服务端按来源 IP 白名单放行); 该 Secret 缺失时 Task16...PG 步骤直接失败;
+#   - 依赖 Secrets: URL_QUOTE_SYNC_BASE(自建行情服务基础地址, 如 http://<实例IP>:16001);
+#     该 Secret 缺失时 Task16...PG 步骤直接失败;
+#   - 依赖 Secrets: API_QUOTE_UPSERT_AK / API_QUOTE_UPSERT_SK(外部 OpenAPI 的 AK/SK,
+#     见 FinvQuant 仓库 Docs/API/OpenAPI/Auth.md §3 模式二);
+#     两个同时存在 -> 每个请求按 META1-HMAC-SHA256 签名(待签串 6 段, 重试 / 413
+#     二分后重发会重新生成时间戳与 nonce), 只配置其中一个 -> 脚本启动即失败;
+#     都未配置 -> 不带签名(服务端 sys_config 19001=0 时仍可用);
 #   - 步骤顺序为 Task16DayMvsvFileDataSyncPG【删除已内置】→ (可选) Supabase 步骤:
 #     源文件只在「该文件全部批次成功」后才删, 所以写入失败不会丢数据
 #     (Upsert 幂等, 修复后重跑自动补齐); 若只是个别行/字段不合法导致 partial
@@ -98,6 +103,11 @@ jobs:
       - name: Task16DayMvsvFileDataSyncPG
         env:
           URL_QUOTE_SYNC_BASE: ${{ secrets.URL_QUOTE_SYNC_BASE }}
+          # 外部 OpenAPI 鉴权(Auth.md §3 模式二: AK/SK 签名): 两个 Secret 同时存在
+          # 即逐请求生成 META1-HMAC-SHA256 签名头; 都未配置则不带签名(服务端
+          # 19001=0 时可用); 只配一个会在脚本启动时直接失败, 不做静默降级
+          API_QUOTE_UPSERT_AK: ${{ secrets.API_QUOTE_UPSERT_AK }}
+          API_QUOTE_UPSERT_SK: ${{ secrets.API_QUOTE_UPSERT_SK }}
           # 定时触发无 inputs, 回落到各自默认值(100 / 150)
           PG_SYNC_BATCH_SIZE: ${{ inputs.batchSize || '100' }}
           PG_SYNC_FILE_LIMIT: ${{ inputs.fileLimit || '500' }}
