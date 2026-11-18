@@ -1,0 +1,178 @@
+name: VerifyQuoteMinute
+
+# 触发方式
+#   1) workflow_dispatch —— 主通道：由外部触发器（调度器 / 人工）指定 usc 调起，参数经
+#      INPUT_* 环境变量透传给 .github/Python/VerifyQuoteMinute.py；
+#   2) schedule —— 可选通道：从仓库内清单文件读取待验证 usc。
+#      注意：schedule 只在【默认分支】上的工作流文件生效；若本文件只在 quote-meta 分支，
+#      需先把工作流放到默认分支（或把 quote-meta 设为默认分支），否则定时触发不会执行。
+on:
+  workflow_dispatch:
+    inputs:
+      usc:
+        description: '待验证证券的 usc，多个用逗号或空白分隔；留空则改读仓库内清单文件'
+        required: false
+        default: ''
+        type: string
+      branch:
+        description: '产物提交目标分支'
+        required: false
+        default: 'quote-meta'
+        type: string
+      checkout_ref:
+        description: '检出哪个分支上的任务脚本；留空 = 本次 dispatch 的 ref'
+        required: false
+        default: ''
+        type: string
+      markets:
+        description: '只处理这些行情市场段（逗号分隔，留空不限）'
+        required: false
+        default: ''
+        type: string
+      interval:
+        description: '相邻两次请求的最小间隔秒数'
+        required: false
+        default: '10'
+        type: string
+      limit:
+        description: '本批最多处理多少条（0 表示不限）'
+        required: false
+        default: '0'
+        type: string
+      price_field:
+        description: '收盘价取用口径：auto / cc_price / price'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - cc_price
+          - price
+      dry_run:
+        description: '只本地生成 .mvsv，不提交到仓库'
+        required: false
+        default: false
+        type: boolean
+      allow_verify_failure:
+        description: '验证失败时也判定为执行成功（不影响 Fail 件回写）'
+        required: false
+        default: false
+        type: boolean
+      sync_dry_run:
+        description: '配置同步只打印待执行 SQL，不写库、不留痕（自动继承 dry_run：dry_run 置真时本项亦为真）'
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    # 每天 01:17 UTC（= 09:17 北京时间）跑一次清单文件里的 usc
+    - cron: '17 1 * * *'
+
+run-name: VerifyQuoteMinute ${{ inputs.usc || '(清单文件)' }}
+
+# 产物要提交回仓库，必须有写权限；Job 内用 github.token 兜底
+permissions:
+  contents: write
+
+# 同一时刻只跑一个采集任务，避免并发提交互相覆盖
+concurrency:
+  group: verify-quote-minute-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: 采集并回写五日分钟行情
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出任务脚本
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.ref }}
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 采集并回写 .mvsv
+        env:
+          # 提交令牌：优先仓库密钥，未配置时用 Actions 内置令牌（需上面的 contents: write）
+          GITHUB_COMMIT_TOKEN: ${{ secrets.GITHUB_COMMIT_TOKEN || github.token }}
+          # 外部触发器指定的参数，经 INPUT_* 透传给 Python 脚本
+          INPUT_USC: ${{ inputs.usc }}
+          INPUT_BRANCH: ${{ inputs.branch }}
+          INPUT_MARKETS: ${{ inputs.markets }}
+          INPUT_INTERVAL: ${{ inputs.interval }}
+          INPUT_LIMIT: ${{ inputs.limit }}
+          INPUT_PRICE_FIELD: ${{ inputs.price_field }}
+          INPUT_OUT_DIR: verify-out
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_ALLOW_VERIFY_FAILURE: ${{ inputs.allow_verify_failure }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          python3 .github/Python/VerifyQuoteMinute.py
+
+      - name: 留档本次生成本地副本
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-out
+          path: verify-out/
+          if-no-files-found: warn
+          retention-days: 14
+
+      # 采集步骤的产物落在 quote-meta 的 Verify/Success|Fail/{market}/；本步骤做它的下游：
+      # 把 Success 下证券（文件名去掉扩展名即 usc）的查询参数回填进 Supabase 的两张配置表
+      # （finv_quote_collect_futu / finv_quote_secu —— 前者 2026-09 由 finv_quote_futu_collect
+      #  改名而来、**主键同时由 stockId 改为 usc**，两张表现在都按 usc 关联），把 flag_enable
+      # 置 '1' 让新配置生效，再把已同步完成的 .mvsv 删掉（脚本常量 CONSUME_SUCCESS = True）让清单头部前移。
+      # 更新规则、抽样口径、未命中留痕、产物消费与退出码见脚本模块 docstring：
+      #   .github/Python/VerifyQuoteMinuteSyncConfig.py
+      #
+      # 本轮做多少行 = 本批 usc（与采集步骤同口径，且必须已在 Success 下）
+      #              + 从 Success 清单【按路径升序】取头部补齐的若干条（可复现、可追溯）。
+      # 目录清单经 Git Trees API 取自【产物分支】（INPUT_BRANCH，默认 quote-meta），与本次
+      # 检出哪个分支无关；但脚本取自检出目录，故需 checkout_ref 指向含本脚本的分支（quote-meta）。
+      - name: 同步配置到 Supabase
+        # 执行条件 success() || failure() = 「前面的脚本进程正常终止」：采集即便因部分证券验证
+        # 失败而返回 1，本轮成功采到的证券仍应把配置同步进库；被取消（cancelled）时不执行。
+        if: success() || failure()
+        env:
+          # MisMatch 留痕（Verify/MisMatch/{usc}.txt）提交到产物分支用；仓库身份优先从 .git 解析，
+          # Actions 里由 GITHUB_REPOSITORY 兜底
+          GITHUB_COMMIT_TOKEN: ${{ secrets.GITHUB_COMMIT_TOKEN || github.token }}
+          # 必填：Supabase 凭据（读两张表现状 + 写回字段）。缺失时脚本打印说明并以退出码 2 收工，
+          # 不会静默跳过（避免「以为同步了其实没同步」）
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          # 本批 usc 与产物分支：与采集步骤完全同口径
+          INPUT_USC: ${{ inputs.usc }}
+          INPUT_BRANCH: ${{ inputs.branch }}
+          INPUT_OUT_DIR: verify-out
+          # ---- 抽样参数（刻意写在文件里：改完提交即生效，不必动脚本）----
+          # 命中概率：每轮先掷一次骰子，未命中则本轮什么都不做（不读库、不写库、不留痕）。
+          # 测试期用 100 便于追赶与观察；稳定后按设计调回 10。
+          INPUT_SYNC_PROBABILITY: '100'
+          # 单轮目标数上限 / 从 Success 清单头部补齐的条数上限（本批 3 条时即 3 + 47 = 50）
+          INPUT_SYNC_BATCH_SIZE: '50'
+          INPUT_SYNC_SAMPLE_LIMIT: '47'
+          # 下面两个是「业务定论」，已写死进脚本常量（VerifyQuoteMinuteSyncConfig.py 的
+          # CONSUME_SUCCESS = True / ALLOW_INSERT = False），此处**不再重复配置** ——
+          # 否则工作流每个分支各一份、内容还会漂移，从别的分支触发就会静默回落到默认值。
+          # 需要临时覆盖时再打开对应注释（脚本会在运行头部打印实际取值与来源）：
+          # INPUT_SYNC_DELETE: '0'
+          # INPUT_SYNC_ALLOW_INSERT: '1'
+          # 只打印待执行 SQL 与待删文件：dry_run 触发时自动继承，避免「只本地生成、不提交仓库」
+          # 的演练反而真的改动线上配置表或删掉产物
+          INPUT_SYNC_DRY_RUN: ${{ inputs.dry_run || inputs.sync_dry_run }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          set -o pipefail
+          code=0
+          python3 .github/Python/VerifyQuoteMinuteSyncConfig.py || code=$?
+          if [ "$code" -eq 0 ]; then
+            echo "✅ 配置同步结束（已同步完成的 .mvsv 已删除，未命中记录已留痕到 Verify/MisMatch/，详见步骤日志与运行摘要）"
+          else
+            echo "::error::配置同步失败，退出码 $code（2=任务级错误：凭据缺失/清单列举失败/开了删除却没有令牌；1=写库、留痕提交或删除 .mvsv 失败。本轮实际配置见步骤日志开头的「策略开关」两行）"
+          fi
+          exit "$code"
