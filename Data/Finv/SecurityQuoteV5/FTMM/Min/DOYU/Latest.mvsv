@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 10530
+# Count : 10532
 # Symbol : US.DOYU
 # SecuCode : DOYU
 # USC : DOYU
@@ -10545,3 +10545,5 @@
 1795035480|20261119|045800|3.63|||3.58|383|1374.89|-0.12|-3.24|3.63
 1795035540|20261119|045900|3.58|||3.59|498|1781.419|-0.11|-2.97|3.58
 1795035600|20261119|050000|3.59|||3.55|278|982.39|-0.15|-4.05|3.59
+1795098660|20261119|223100||||3.55|12|46.335|0|0.00|
+1795098720|20261119|223200|3.55|||3.55|0|0|0|0.00|3.55
