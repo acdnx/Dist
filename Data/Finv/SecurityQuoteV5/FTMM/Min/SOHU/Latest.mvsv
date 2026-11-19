@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 10530
+# Count : 10532
 # Symbol : US.SOHU
 # SecuCode : SOHU
 # USC : SOHU
@@ -10545,3 +10545,5 @@
 1795035480|20261119|045800|10.84|||10.85|801|8694.965|-0.38|-3.38|10.84
 1795035540|20261119|045900|10.85|||10.85|180|1949.84|-0.38|-3.38|10.85
 1795035600|20261119|050000|10.85|||10.85|2757|29929.563|-0.38|-3.38|10.85
+1795098660|20261119|223100||||10.82|1057|11518.874|-0.03|-0.28|
+1795098720|20261119|223200|10.82|||10.82|0|0|-0.03|-0.28|10.82
