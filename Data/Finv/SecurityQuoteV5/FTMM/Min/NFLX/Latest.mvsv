@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 10530
+# Count : 10531
 # Symbol : US.NFLX
 # SecuCode : NFLX
 # USC : NFLX
@@ -10545,3 +10545,4 @@
 1795121880|20261120|045800|58.52|||58.47|283311|16574855.568|-1.35|-2.26|58.52
 1795121940|20261120|045900|58.47|||58.49|358319|20966696.473|-1.33|-2.22|58.47
 1795122000|20261120|050000|58.49|||58.46|4562423|266745493.714|-1.36|-2.27|58.49
+1795185060|20261120|223100||||58.56|1958882|114508239.761|0.1|0.17|
