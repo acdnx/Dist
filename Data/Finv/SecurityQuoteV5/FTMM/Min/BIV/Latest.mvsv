@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 10530
+# Count : 10532
 # Symbol : US.BIV
 # SecuCode : BIV
 # USC : BIV
@@ -10545,3 +10545,5 @@
 1795121880|20261120|045800|73.665|||73.665|1630|120072.135|0.065|0.09|73.665
 1795121940|20261120|045900|73.665|||73.655|8597|633227.553|0.055|0.07|73.665
 1795122000|20261120|050000|73.655|||73.66|33809|2490482.12|0.06|0.08|73.655
+1795185060|20261120|223100||||73.94|85529|6319858.25|0.28|0.38|
+1795185120|20261120|223200|73.94|||73.94|14665|1084317.706|0.28|0.38|73.94
