@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 10530
+# Count : 10531
 # Symbol : US.TCOM
 # SecuCode : TCOM
 # USC : TCOM
@@ -10545,3 +10545,4 @@
 1795121880|20261120|045800|42.275|||42.285|43589|1843027.297|-0.765|-1.78|42.275
 1795121940|20261120|045900|42.285|||42.265|55399|2342322.886|-0.785|-1.82|42.285
 1795122000|20261120|050000|42.265|||42.26|344085|14542030.837|-0.79|-1.84|42.265
+1795185060|20261120|223100||||41.38|67627|2795303.529|-0.88|-2.08|
