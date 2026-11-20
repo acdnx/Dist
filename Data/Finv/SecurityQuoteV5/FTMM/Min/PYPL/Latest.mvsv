@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 10530
+# Count : 10531
 # Symbol : US.PYPL
 # SecuCode : PYPL
 # USC : PYPL
@@ -10545,3 +10545,4 @@
 1795121880|20261120|045800|56.425|||56.385|71419|4028695.095|-1.505|-2.60|56.425
 1795121940|20261120|045900|56.385|||56.37|88133|4969220.786|-1.52|-2.63|56.385
 1795122000|20261120|050000|56.37|||56.37|1793873|101122178.294|-1.52|-2.63|56.37
+1795185060|20261120|223100||||53.8743|803246|43059233.6|-2.4957|-4.43|
