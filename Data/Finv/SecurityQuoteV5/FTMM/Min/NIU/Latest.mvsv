@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 10530
+# Count : 10532
 # Symbol : US.NIU
 # SecuCode : NIU
 # USC : NIU
@@ -10545,3 +10545,5 @@
 1795553880|20261125|045800|1.485|||1.4895|2091|3115.803|0.0595|4.16|1.485
 1795553940|20261125|045900|1.4895|||1.49|2050|3054.195|0.06|4.20|1.4895
 1795554000|20261125|050000|1.49|||1.49|8936|13285.69|0.06|4.20|1.49
+1795617060|20261125|223100||||1.46|10849|16144.708|-0.03|-2.01|
+1795617120|20261125|223200|1.46|||1.4201|169|240.755|-0.0699|-4.69|1.46
