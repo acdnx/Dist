@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 10530
+# Count : 10531
 # Symbol : US.GOOG
 # SecuCode : GOOG
 # USC : GOOG
@@ -10545,3 +10545,4 @@
 1795553880|20261125|045800|276.485|||276.495|107867|29827626.855|-3.035|-1.09|276.485
 1795553940|20261125|045900|276.495|||276.49|159165|44014241.825|-3.04|-1.09|276.495
 1795554000|20261125|050000|276.49|||276.58|3313568|916469938.797|-2.95|-1.06|276.49
+1795617060|20261125|223100||||262.62|612989|161391594.924|-13.96|-5.05|
