@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 29156
+# Count : 29160
 # Symbol : HK.GDRCURRENT
 # SecuCode : GDRCurrent
 # USC : GDRCurrent
@@ -29171,3 +29171,7 @@
 1795632840|20261126|025400|759.8|||759.8|0|0|0|0.00|759.8
 1795632900|20261126|025500|759.8|||759.8|0|0|0|0.00|759.8
 1795632960|20261126|025600|759.8|||759.8|0|0|0|0.00|759.8
+1795633020|20261126|025700|759.8|||759.8|0|0|0|0.00|759.8
+1795633080|20261126|025800|759.8|||759.8|0|0|0|0.00|759.8
+1795633140|20261126|025900|759.8|||759.8|0|0|0|0.00|759.8
+1795633200|20261126|030000|759.8|||759.8|0|0|0|0.00|759.8
