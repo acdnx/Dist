@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 6942
+# Count : 6945
 # Symbol : SZ.300663
 # SecuCode : 300663
 # USC : 300663
@@ -6957,3 +6957,6 @@
 1795678080|20261126|152800|5.53|||5.53|0|0|0|0.00|5.53
 1795678140|20261126|152900|5.53|||5.53|0|0|0|0.00|5.53
 1795678200|20261126|153000|5.53|||5.53|3200|17696|0|0.00|5.53
+1795743000|20261127|093000||||5.55|59100|328005|0.02|0.36|
+1795743060|20261127|093100|5.55|||5.69|577100|3262388|0.16|2.89|5.55
+1795743120|20261127|093200|5.69|||5.78|1068300|6133556|0.25|4.52|5.69
