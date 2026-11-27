@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 10140
+# Count : 10142
 # Symbol : US.MOMO
 # SecuCode : MOMO
 # USC : MOMO
@@ -10155,3 +10155,5 @@
 1795640280|20261126|045800|4.36|||4.36|11078|48298.339|0.14|3.32|4.36
 1795640340|20261126|045900|4.36|||4.36|23425|102132.213|0.14|3.32|4.36
 1795640400|20261126|050000|4.36|||4.36|99306|432954.935|0.14|3.32|4.36
+1795789860|20261127|223100||||4.39|53040|235549.576|0.03|0.69|
+1795789920|20261127|223200|4.39|||4.405|4516|19791.301|0.045|1.03|4.39
