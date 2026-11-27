@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 3510
+# Count : 3511
 # Symbol : US.ANT
 # SecuCode : ANT
 # USC : ANT
@@ -3525,3 +3525,4 @@
 1795640280|20261126|045800|82.565|||82.53|1250774|103372513.288|0.625|0.76|82.565
 1795640340|20261126|045900|82.53|||82.595|1485932|122677250.676|0.69|0.84|82.53
 1795640400|20261126|050000|82.595|||82.79|53130596|4398361726.399|0.885|1.08|82.595
+1795789860|20261127|223100||||85.85|6160156|525542795.476|3.06|3.70|
