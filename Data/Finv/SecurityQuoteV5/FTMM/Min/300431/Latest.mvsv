@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 6942
+# Count : 6945
 # Symbol : SZ.300431
 # SecuCode : 300431
 # USC : 300431
@@ -6957,3 +6957,6 @@
 1795678080|20261126|152800|0.28|||0.28|0|0|0|0.00|0.28
 1795678140|20261126|152900|0.28|||0.28|0|0|0|0.00|0.28
 1795678200|20261126|153000|0.28|||0.28|0|0|0|0.00|0.28
+1795743000|20261127|093000||||0.28|0|0|0|0.00|
+1795743060|20261127|093100|0.28|||0.28|0|0|0|0.00|0.28
+1795743120|20261127|093200|0.28|||0.28|0|0|0|0.00|0.28
