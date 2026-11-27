@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 10140
+# Count : 10141
 # Symbol : US.TAL
 # SecuCode : TAL
 # USC : TAL
@@ -10155,3 +10155,4 @@
 1795640280|20261126|045800|9.995|||9.995|16010|160004.201|0.055|0.55|9.995
 1795640340|20261126|045900|9.995|||10.005|65391|653814.685|0.065|0.65|9.995
 1795640400|20261126|050000|10.005|||9.98|539402|5384868.223|0.04|0.40|10.005
+1795789860|20261127|223100||||10.2|126591|1294082.31|0.22|2.20|
