@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 10140
+# Count : 10142
 # Symbol : US.NIO
 # SecuCode : NIO
 # USC : NIO
@@ -10155,3 +10155,5 @@
 1795640280|20261126|045800|2.69|||2.685|649615|1746600.953|0.105|4.07|2.69
 1795640340|20261126|045900|2.685|||2.69|486558|1307152.757|0.11|4.26|2.685
 1795640400|20261126|050000|2.69|||2.69|2890273|7772291.416|0.11|4.26|2.69
+1795789860|20261127|223100||||2.835|121278|345250.289|0.145|5.39|
+1795789920|20261127|223200|2.835|||2.885|981215|2801223.002|0.195|7.25|2.835
