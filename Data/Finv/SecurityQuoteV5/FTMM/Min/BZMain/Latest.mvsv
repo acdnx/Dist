@@ -5,7 +5,7 @@
 # FieldName : "Timestamp|Date|Time|Open|High|Low|Close|Volume|Turnover|ChangePrice|ChangeRatio|LastClose"
 # FieldType : "Int|Int|Int|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal|Decimal"
 # TypeKLine : Min
-# Count : 36751
+# Count : 36752
 # Symbol : US.BZMAIN
 # SecuCode : BZMain
 # USC : BZMain
@@ -36766,3 +36766,4 @@
 1795721280|20261127|032800|91.65|||91.65|0|0|0.83|0.91|91.65
 1795721340|20261127|032900|91.65|||91.65|0|0|0.83|0.91|91.65
 1795721400|20261127|033000|91.65|||91.73|1|0|0.91|1.00|91.65
+1795734060|20261127|070100||||91.58|1|0|0.76|0.84|
